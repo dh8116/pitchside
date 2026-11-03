@@ -20,7 +20,8 @@ Pitchside:  Two hours of silence means nothing yet. The bounce is the thing to f
 - **Learns your business by text.** One question at a time: product, buyer, stage, which accounts you post from, what you've tried, your goal for the next 30 days.
 - **30-day challenge.** Starts when you first message. Every day has one outcome, and it remembers what you committed to.
 - **Morning check-ins.** At 8am your time (configurable), it texts you today's single most important thing.
-- **Build-in-public posts.** Drafts "Day N of 30" posts for X, LinkedIn or Threads in your voice, often two options, and says which is stronger. Each comes with a **tap-to-post** link that opens the composer pre-filled.
+- **Build-in-public posts.** Drafts "Day N of 30" posts for X, LinkedIn, Threads or Bluesky in your voice, often two options, and says which is stronger. Each comes with a **tap-to-post** link that opens the composer pre-filled.
+- **Auto-posting (optional).** Connect X, LinkedIn and/or Bluesky and Pitchside publishes its drafts for you: reply "post it" and it's live. Only the owners you list can post. See [Auto-posting](#auto-posting).
 - **Outreach coaching.** Who to target, cold email and DM copy, send timing, deliverability (seed tests, sender identity, bounces), follow-ups, and phone routes when email is blocked.
 - **Positioning and launch reviews.** Landing copy, pricing pages, Product Hunt, Hacker News and Reddit plans, and where each will get pushback.
 - **Competitor checks.** Uses web search to look up competitors and gives you the news straight, with links.
@@ -59,12 +60,15 @@ git clone https://github.com/dh8116/pitchside.git
 cd pitchside
 npm install
 cp .env.example .env      # add GEMINI_API_KEY or GROQ_API_KEY (both free)
+                          # or fill it in with the .env builder (below)
 npm start                 # http://localhost:3000
 ```
 
 Open the browser chat to try the coach before you wire up any messaging channel. To receive webhooks on your laptop, expose it with a tunnel (e.g. `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`) and set `PUBLIC_URL` to the tunnel address.
 
 Requires Node 20.12+ and one model key (see the table above).
+
+**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/) loads this repo's `.env.example`, explains every setting, generates secrets in one click, and gives you a finished `.env` to copy or download. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
 
 ## "I just want to message it": the 15-minute setup
 
@@ -107,6 +111,22 @@ Group chats are ignored. Pitchside only replies in 1:1 conversations.
 
 Replies stay in the same thread. Auto-replies and mail from Pitchside's own address are ignored, so it never loops.
 
+## Auto-posting
+
+Pitchside can publish the posts it drafts straight to **X**, **LinkedIn** and **Bluesky**. It's off until you set it up, and only the people in `POST_OWNERS` can ever post.
+
+1. Add credentials for the platforms you want (any combination):
+   - **X:** create an app at [developer.x.com](https://developer.x.com) with **Read and Write** permission, then set `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (regenerate the access token after switching to Read and Write).
+   - **LinkedIn:** an OAuth access token with `w_member_social` (or `w_organization_social` for a company page) in `LINKEDIN_ACCESS_TOKEN`, and the author URN (`urn:li:person:…` or `urn:li:organization:…`) in `LINKEDIN_AUTHOR`.
+   - **Bluesky:** your handle in `BLUESKY_HANDLE` and an [app password](https://bsky.app/settings/app-passwords) (not your real password) in `BLUESKY_APP_PASSWORD`.
+2. Set `POST_OWNERS` to who may post, comma-separated: a phone number (`+15551234567`), an email address, a full key such as `whatsapp:+15551234567`, or `web` for the local browser chat.
+
+How it behaves:
+- **Default:** when an owner gets a draft, Pitchside asks for confirmation. Reply **`post it`** and it publishes, then sends you the link. If it drafted two options, reply **`post 1`** or **`post 2`**. In the browser chat, each post card has a **Post now** button.
+- **`AUTO_POST=1`:** drafts are published the moment they're written. When there are two options for the same platform, it still waits for you to pick one.
+- If posting fails (for example, a duplicate post or an expired token), the draft stays saved and the error is shown, so you can fix it and reply `post it` again.
+- Everyone else just gets the tap-to-post link, as before.
+
 ## Things you can text it
 
 | Text | What happens |
@@ -117,6 +137,7 @@ Replies stay in the same thread. Auto-replies and mail from Pitchside's own addr
 | `restart challenge` | starts a new 30 days today |
 | `reset` | forgets the conversation and notes |
 | `help` | lists these |
+| `post it` / `post 2` | publishes the waiting draft (owners only, see [Auto-posting](#auto-posting)) |
 
 ## How it works
 
@@ -130,6 +151,9 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
                                                         src/format.js  reply → bubbles, <post> → tap-to-post links
                                                               │
                                                               ▼
+                                                        src/posting/   owners only: "post it" → X / LinkedIn / Bluesky
+                                                              │
+                                                              ▼
                                                    channel.send(): one message per bubble, in order
 ```
 
@@ -139,6 +163,8 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 - The system prompt lives in `src/prompts.js`. Change the coach's personality there.
 - `src/llm.js` hides the model provider behind one `complete()` call and chains providers for fallback. On Claude, a declined request is also rerun server-side on a fallback model.
 - `src/knowledge.js` holds the coaching playbooks, written from scratch.
+- `src/posting/` holds one small client per platform (X uses OAuth 1.0a, LinkedIn the Posts API, Bluesky the AT Protocol), plus the owner check and the confirm-before-posting flow.
+- `docs/index.html` is the `.env` builder, served by GitHub Pages from the `docs/` folder.
 
 ## Deploying
 
