@@ -5,33 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pitchside</title>
   <meta name="description" content="Open-source go-to-market coach you text like a friend">
+  <meta name="theme-color" content="#07130d">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap">
   <link rel="stylesheet" href="style.css">
   <script src="app.js" type="module"></script>
 </head>
 <body>
   <div class="phone">
     <header class="top">
-      <img src="favicon.svg" alt="" width="36" height="36">
+      <img src="favicon.svg" alt="" width="38" height="38">
       <div class="who">
         <strong>Pitchside</strong>
-        <span id="status">your go-to-market coach</span>
+        <span id="status"><i class="dot"></i>your go-to-market coach</span>
       </div>
-      <button id="new" class="ghost" title="Start a new conversation">New</button>
+      <button id="new" class="ghost" title="Start a new conversation">New chat</button>
     </header>
 
     <div id="log" class="log" aria-live="polite"></div>
+
+    <div id="chips" class="chips" aria-label="Suggestions"></div>
 
     <form id="form" class="composer">
       <button type="button" id="mic" class="icon" title="Dictate" aria-label="Dictate a message">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
       </button>
-      <textarea id="input" rows="1" placeholder="Message" aria-label="Message"></textarea>
+      <textarea id="input" rows="1" placeholder="Tell your coach what you're working on…" aria-label="Message"></textarea>
       <button type="submit" id="send" class="send" aria-label="Send">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
       </button>
     </form>
   </div>
-  <p class="hint">This is the local test chat. In real use you text Pitchside on WhatsApp, iMessage or SMS, or email it. See the README.</p>
+  <p class="hint">Local test chat. In real use you text Pitchside on WhatsApp, iMessage or SMS, or email it. See the README.</p>
 </body>
 </html>
