@@ -3,17 +3,13 @@
 import { COACH_PROMPT, CHECKIN_REQUEST } from './prompts.js';
 import { parseReply } from './format.js';
 import { newUser } from './users.js';
+import { KNOWLEDGE } from './knowledge.js';
 
-export const DEFAULT_MODEL = 'claude-opus-5';
+const SYSTEM = `${COACH_PROMPT}\n\n${KNOWLEDGE}`;
 const MAX_HISTORY = 80;
 const MAX_NOTES = 40;
 const MAX_INBOUND_CHARS = 6000;
-const MAX_PAUSE_CONTINUATIONS = 3;
 const DAY_MS = 86_400_000;
-
-// Server-side refusal fallback: if the main model declines, the API reruns
-// the request on a fallback model it picks, inside the same call.
-const FALLBACK = { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
 
 function validTimezone(tz) {
   try { new Intl.DateTimeFormat('en', { timeZone: tz }); return true; } catch { return false; }
@@ -56,32 +52,6 @@ export function buildMessages(user, turnText, now = new Date()) {
   return [...history, { role: 'user', content: `${contextLine(user, now)}\n${turnText}` }];
 }
 
-async function callModel(client, { model, messages, webSearch, signal }) {
-  const tools = webSearch ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }] : undefined;
-  const convo = [...messages];
-  let text = '';
-  for (let i = 0; i <= MAX_PAUSE_CONTINUATIONS; i++) {
-    const msg = await client.beta.messages.stream({
-      ...FALLBACK,
-      model,
-      max_tokens: 16000,
-      thinking: { type: 'adaptive' },
-      output_config: { effort: 'medium' },
-      cache_control: { type: 'ephemeral' },
-      system: COACH_PROMPT,
-      tools,
-      messages: convo,
-    }, { signal }).finalMessage();
-
-    for (const block of msg.content) if (block.type === 'text') text += block.text;
-    if (msg.stop_reason === 'refusal') return `${text}\n\nI can't help with that one. Try me on a different angle.`;
-    // A long web-search turn can pause; hand it back as-is so it can finish.
-    if (msg.stop_reason !== 'pause_turn') break;
-    convo.push({ role: 'assistant', content: msg.content });
-  }
-  return text;
-}
-
 const HELP = `Commands: "timezone Europe/London" sets your clock for check-ins · "pause" stops morning check-ins · "resume" turns them back on · "restart challenge" starts a new 30 days · "reset" forgets this conversation.`;
 
 function handleCommand(user, text, now) {
@@ -101,7 +71,7 @@ function handleCommand(user, text, now) {
   return null;
 }
 
-export function createCoach({ client, users, model = DEFAULT_MODEL, webSearch = true, channels = {}, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
+export function createCoach({ llm, users, webSearch = true, channels = {}, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
   const queues = new Map();
 
   // One message at a time per person, so replies never interleave.
@@ -153,7 +123,7 @@ export function createCoach({ client, users, model = DEFAULT_MODEL, webSearch = 
         bubbles = [{ type: 'text', text: "That's a lot for one day. Go do the work and tell me how it went tomorrow." }];
       } else {
         user.challengeStartedAt ??= t.toISOString();
-        const raw = await callModel(client, { model, webSearch, messages: buildMessages(user, body, t) });
+        const raw = await llm.complete({ system: SYSTEM, webSearch, messages: buildMessages(user, body, t) });
         const parsed = parseReply(raw);
         remember(user, parsed.memories);
         bubbles = parsed.bubbles;
@@ -180,7 +150,7 @@ export function createCoach({ client, users, model = DEFAULT_MODEL, webSearch = 
       if (user.channel === 'whatsapp' || user.address?.startsWith?.('whatsapp:')) {
         if (!user.lastInboundAt || t - new Date(user.lastInboundAt) > 23 * 3_600_000) return false;
       }
-      const raw = await callModel(client, { model, webSearch: false, messages: buildMessages(user, CHECKIN_REQUEST, t) });
+      const raw = await llm.complete({ system: SYSTEM, webSearch: false, messages: buildMessages(user, CHECKIN_REQUEST, t) });
       const { bubbles, memories } = parseReply(raw);
       remember(user, memories);
       user.messages.push({ role: 'user', content: CHECKIN_REQUEST, at: t.toISOString() }, { role: 'assistant', content: raw, at: now().toISOString() });

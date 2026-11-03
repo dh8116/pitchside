@@ -9,6 +9,7 @@ import { parseReply, bubbleToText, bubblesToEmail } from '../src/format.js';
 import { createCoach, challengeDay, buildMessages } from '../src/coach.js';
 import { createUserStore, newUser } from '../src/users.js';
 import { createApp } from '../src/app.js';
+import { anthropicLLM, openaiCompatibleLLM, chainLLM, llmFromEnv } from '../src/llm.js';
 import { whatsappChannel } from '../src/channels/whatsapp.js';
 import { twilioChannel, twilioSignature } from '../src/channels/twilio.js';
 import { imessageChannel } from '../src/channels/imessage.js';
@@ -64,7 +65,7 @@ test('coach replies, remembers facts, starts the challenge, and delivers via the
   const users = await tmpStore();
   const client = fakeClient(['Nice. Who buys it?\n\nAnd what have you tried?<remember>Building Acme, an AI voice app</remember>']);
   const wa = recordingChannel();
-  const coach = createCoach({ client, users, channels: { whatsapp: wa }, now: () => new Date('2026-11-03T09:00:00Z') });
+  const coach = createCoach({ llm: anthropicLLM(client), users, channels: { whatsapp: wa }, now: () => new Date('2026-11-03T09:00:00Z') });
 
   const bubbles = await coach.handleInbound({ key: 'whatsapp:+15550001', channel: 'whatsapp', address: '15550001', messageId: 'm1', text: 'I build Acme' });
   assert.equal(bubbles.length, 2);
@@ -86,7 +87,7 @@ test('coach replies, remembers facts, starts the challenge, and delivers via the
 test('webhook retries with the same message id are ignored', async () => {
   const users = await tmpStore();
   const client = fakeClient(['one', 'two']);
-  const coach = createCoach({ client, users });
+  const coach = createCoach({ llm: anthropicLLM(client), users });
   const msg = { key: 'sms:+1', channel: 'twilio', address: '+1', messageId: 'SM1', text: 'hi', deliver: false };
   await coach.handleInbound(msg);
   assert.deepEqual(await coach.handleInbound(msg), []);
@@ -96,7 +97,7 @@ test('webhook retries with the same message id are ignored', async () => {
 test('commands are handled without calling the model', async () => {
   const users = await tmpStore();
   const client = fakeClient([]);
-  const coach = createCoach({ client, users });
+  const coach = createCoach({ llm: anthropicLLM(client), users });
   const base = { key: 'web:x', channel: 'web', address: 'x', deliver: false };
   const [tz] = await coach.handleInbound({ ...base, text: 'timezone Pacific/Auckland' });
   assert.match(tz.text, /Pacific\/Auckland/);
@@ -129,7 +130,7 @@ test('pause_turn continues the same turn', async () => {
     { content: [{ type: 'text', text: 'Looking them up. ' }], stop_reason: 'pause_turn' },
     { content: [{ type: 'text', text: 'I have some bad news.' }], stop_reason: 'end_turn' },
   ]);
-  const coach = createCoach({ client, users });
+  const coach = createCoach({ llm: anthropicLLM(client), users });
   const bubbles = await coach.handleInbound({ key: 'web:y', channel: 'web', address: 'y', text: 'any competitors?', deliver: false });
   assert.equal(bubbles[0].text, 'Looking them up. I have some bad news.');
   assert.equal(client.calls.length, 2);
@@ -141,7 +142,7 @@ test('morning check-in goes out once, at the check-in hour, inside the WhatsApp 
   let now = new Date('2026-11-03T10:00:00Z');
   const client = fakeClient(['first reply', 'Morning. Today: three buyer emails by 9.']);
   const wa = recordingChannel();
-  const coach = createCoach({ client, users, channels: { whatsapp: wa }, now: () => now });
+  const coach = createCoach({ llm: anthropicLLM(client), users, channels: { whatsapp: wa }, now: () => now });
   await coach.handleInbound({ key: 'whatsapp:+1', channel: 'whatsapp', address: '1', text: 'hi' });
 
   now = new Date('2026-11-04T07:10:00Z'); // 07:00 UTC hour → not 8
@@ -213,7 +214,7 @@ test('email webhook: threads replies, ignores auto-replies and our own address',
 test('HTTP app: web chat round trip and webhook routing', async () => {
   const users = await tmpStore();
   const client = fakeClient(['Hey.\n\nWhat do you sell?']);
-  const coach = createCoach({ client, users });
+  const coach = createCoach({ llm: anthropicLLM(client), users });
   const app = createApp({ coach, users, channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
   const server = http.createServer(app).listen(0);
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -235,4 +236,45 @@ test('HTTP app: web chat round trip and webhook routing', async () => {
   } finally {
     server.close();
   }
+});
+
+test('OpenAI-compatible provider (Gemini/Groq) sends system + history and returns the text', async () => {
+  let sent;
+  const llm = openaiCompatibleLLM({
+    name: 'groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'k', model: 'm',
+    fetchImpl: async (url, init) => { sent = { url, init, body: JSON.parse(init.body) }; return Response.json({ choices: [{ message: { content: 'Ship it.' } }] }); },
+  });
+  const text = await llm.complete({ system: 'SYS', messages: [{ role: 'user', content: 'hi', at: 'x' }] });
+  assert.equal(text, 'Ship it.');
+  assert.equal(sent.url, 'https://api.groq.com/openai/v1/chat/completions');
+  assert.equal(sent.init.headers.authorization, 'Bearer k');
+  assert.deepEqual(sent.body.messages, [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'hi' }]);
+});
+
+test('provider chain falls through on rate limits but not on bad requests', async () => {
+  const failing = (status) => ({ name: `f${status}`, supportsWebSearch: false, complete: async () => { throw Object.assign(new Error('x'), { status }); } });
+  const good = { name: 'good', supportsWebSearch: false, complete: async () => 'answer' };
+  const quiet = { warn() {} };
+  assert.equal(await chainLLM([failing(429), good], { log: quiet }).complete({}), 'answer');
+  assert.equal(await chainLLM([failing(503), good], { log: quiet }).complete({}), 'answer');
+  await assert.rejects(chainLLM([failing(400), good], { log: quiet }).complete({}), { status: 400 });
+});
+
+test('llmFromEnv picks free providers from keys, Claude first when present', () => {
+  assert.equal(llmFromEnv({}), null);
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g' }).name, 'gemini (gemini-2.5-flash)');
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q' }).name, 'gemini (gemini-2.5-flash) → groq (openai/gpt-oss-120b)');
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q', LLM_PROVIDERS: 'groq' }).name, 'groq (openai/gpt-oss-120b)');
+  const withClaude = llmFromEnv({ ANTHROPIC_API_KEY: 'a', GROQ_API_KEY: 'q' }, { createAnthropicClient: () => ({}) });
+  assert.match(withClaude.name, /^claude \(claude-opus-5\) → groq/);
+  assert.equal(withClaude.supportsWebSearch, true);
+});
+
+test('coach system prompt includes the playbook knowledge', async () => {
+  let system;
+  const llm = { name: 't', complete: async (args) => { system = args.system; return 'ok'; } };
+  const coach = createCoach({ llm, users: await tmpStore() });
+  await coach.handleInbound({ key: 'web:k', channel: 'web', address: 'k', text: 'hi', deliver: false });
+  assert.match(system, /You are Pitchside/);
+  assert.match(system, /Seed-test before a real send/);
 });

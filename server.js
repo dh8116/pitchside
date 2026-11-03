@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { createApp } from './src/app.js';
-import { createCoach, DEFAULT_MODEL } from './src/coach.js';
+import { createCoach } from './src/coach.js';
+import { llmFromEnv } from './src/llm.js';
 import { createUserStore } from './src/users.js';
 import { whatsappChannel } from './src/channels/whatsapp.js';
 import { twilioChannel } from './src/channels/twilio.js';
@@ -14,8 +15,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env;
 const port = Number(env.PORT ?? 3000);
 
-if (!env.ANTHROPIC_API_KEY && !env.ANTHROPIC_AUTH_TOKEN) {
-  console.warn('Warning: ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.');
+const llm = llmFromEnv(env, { createAnthropicClient: () => new Anthropic() });
+if (!llm) {
+  console.error(`No model provider configured. Add one of these to .env (free options first):
+  GEMINI_API_KEY     free at https://aistudio.google.com/apikey
+  GROQ_API_KEY       free at https://console.groq.com/keys
+  ANTHROPIC_API_KEY  paid, best quality, enables web search`);
+  process.exit(1);
 }
 
 // A channel is turned on when its settings are present.
@@ -54,10 +60,9 @@ if (env.POSTMARK_SERVER_TOKEN && env.EMAIL_FROM) {
 
 const users = createUserStore(path.resolve(env.DATA_DIR ?? path.join(here, 'data')));
 const coach = createCoach({
-  client: new Anthropic(),
+  llm,
   users,
   channels,
-  model: env.PITCHSIDE_MODEL || DEFAULT_MODEL,
   webSearch: env.PITCHSIDE_WEB_SEARCH !== '0',
 });
 
@@ -72,6 +77,7 @@ const handler = createApp({
 http.createServer(handler).listen(port, () => {
   const on = Object.keys(channels);
   console.log(`Pitchside is running at http://localhost:${port}`);
+  console.log(`Model: ${llm.name}`);
   console.log(`Channels: ${on.length ? on.join(', ') : 'none configured (web chat only)'}`);
 });
 

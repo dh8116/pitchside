@@ -25,6 +25,20 @@ Pitchside:  Two hours of silence means nothing yet. The bounce is the thing to f
 - **Positioning and launch reviews.** Landing copy, pricing pages, Product Hunt, Hacker News and Reddit plans, and where each will get pushback.
 - **Competitor checks.** Uses web search to look up competitors and gives you the news straight, with links.
 - **Memory.** Keeps durable facts about you across weeks, stored as plain JSON on your server.
+- **Built-in playbooks.** The coach carries a written knowledge base (`src/knowledge.js`) covering the 30-day challenge structure, finding the decision-maker, cold email, deliverability and seed tests, build-in-public posts, positioning, launches (Product Hunt, Hacker News, Reddit), competitors and early pricing. It's plain prose, so edit it to teach the coach your own playbook.
+
+## Runs on free models
+
+You don't need a paid API. Set any one of these (more than one = automatic fallback when one is rate-limited):
+
+| Provider | Cost | Key | Notes |
+|---|---|---|---|
+| Google Gemini | free tier | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | default `gemini-2.5-flash` |
+| Groq | free tier | [console.groq.com/keys](https://console.groq.com/keys) | default `openai/gpt-oss-120b`, very fast |
+| Anthropic Claude | paid | [console.anthropic.com](https://console.anthropic.com) | best coaching quality; enables web-search competitor checks |
+| Anything OpenAI-compatible | varies | `LLM_BASE_URL` + `LLM_MODEL` | OpenRouter, a local Ollama, etc. |
+
+Free tiers have rate limits, which is fine for one person or a small group.
 
 ## Channels
 
@@ -44,13 +58,24 @@ A channel turns on when its environment variables are set. Use any combination.
 git clone https://github.com/dh8116/pitchside.git
 cd pitchside
 npm install
-cp .env.example .env      # add ANTHROPIC_API_KEY at minimum
+cp .env.example .env      # add GEMINI_API_KEY or GROQ_API_KEY (both free)
 npm start                 # http://localhost:3000
 ```
 
 Open the browser chat to try the coach before you wire up any messaging channel. To receive webhooks on your laptop, expose it with a tunnel (e.g. `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`) and set `PUBLIC_URL` to the tunnel address.
 
-Requires Node 20.12+ and an [Anthropic API key](https://console.anthropic.com). By default it uses `claude-opus-5`; set `PITCHSIDE_MODEL` to change it.
+Requires Node 20.12+ and one model key (see the table above).
+
+## "I just want to message it": the 15-minute setup
+
+Pitchside has no shared public number. Each person or team runs their own copy, which keeps your conversations on your server. The setup is one-time and needs no coding. After that you just text it.
+
+1. **Get a free model key** from Google AI Studio or Groq (see above).
+2. **Deploy:** fork this repo on GitHub, then create a new service from your fork on [Railway](https://railway.com) or [Render](https://render.com). Add `GEMINI_API_KEY` (or `GROQ_API_KEY`), `WEB_CHAT=0`, and a long random `WEBHOOK_SECRET` as environment variables, and attach a disk/volume mounted at `/data` with `DATA_DIR=/data` so memory survives restarts. Copy the public URL it gives you into `PUBLIC_URL`.
+3. **Get a WhatsApp number for free:** in [Meta for Developers](https://developers.facebook.com), create an app, add WhatsApp, and use the free **test number** it gives you. Add your own phone as an allowed recipient (the test number can message up to 5 numbers). Copy the token and phone number ID into `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID`, pick a `WHATSAPP_VERIFY_TOKEN`, and set the webhook (details below).
+4. **Save that number in your phone and say hi.**
+
+For SMS, iMessage or email instead, swap step 3 for the matching section below. To open it to more people than the test number allows, register your own business number in Meta's WhatsApp Manager.
 
 ## Setting up each channel
 
@@ -112,7 +137,8 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 - Messages from one person are processed one at a time, and retried webhooks are de-duplicated by message ID.
 - Each person is one JSON file in `DATA_DIR`. Back it up, or swap `src/users.js` for a database.
 - The system prompt lives in `src/prompts.js`. Change the coach's personality there.
-- If the main model declines a request, the API's server-side fallback reruns it on another model in the same call.
+- `src/llm.js` hides the model provider behind one `complete()` call and chains providers for fallback. On Claude, a declined request is also rerun server-side on a fallback model.
+- `src/knowledge.js` holds the coaching playbooks, written from scratch.
 
 ## Deploying
 

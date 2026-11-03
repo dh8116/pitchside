@@ -25,8 +25,9 @@ function send(res, status, body, headers = { 'content-type': 'application/json' 
 }
 
 function friendlyError(err) {
-  // No status = the SDK failed before sending, which here means no credentials were found.
-  if (err?.status === 401 || (!err?.status && /authentication method/i.test(err?.message))) return 'The Anthropic API key is missing or invalid. Set ANTHROPIC_API_KEY in .env.';
+  // Bad keys: 401 on most APIs, 400 "API key not valid" on Gemini, or no status
+  // at all when the Anthropic SDK finds no credentials before sending.
+  if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) return 'The model API key is missing or invalid. Check GEMINI_API_KEY / GROQ_API_KEY / ANTHROPIC_API_KEY in .env.';
   if (err?.status === 429) return 'Rate limited by the API. Give it a minute.';
   return 'Something went wrong on my side. Try again in a moment.';
 }
