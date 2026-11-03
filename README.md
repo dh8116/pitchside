@@ -1,1 +1,142 @@
-# pitchside
+# Pitchside
+
+**An open-source go-to-market coach you text like a friend.** Message it on WhatsApp, iMessage or SMS, or email it, and it helps you get what you're building in front of buyers, one day at a time.
+
+Pitchside follows the "AI friend in your messages" style of coaching: short, decisive texts; a 30-day challenge with a morning check-in; build-in-public posts drafted in your voice with a tap-to-post link; and blunt, specific help with outreach and launches. It deliberately has **no introductions or matchmaking**. It coaches you, and you do the reaching out.
+
+```
+You:        no reply yet, and one address bounced
+Pitchside:  Two hours of silence means nothing yet. The bounce is the thing to fix.
+
+            Don't guess another address at that company. Call the switchboard
+            between 8 and 9, ask who owns customer training, and get the
+            right name and email.
+
+            Rest of today: replies, then the demo clip. Nothing else.
+```
+
+## What it does
+
+- **Learns your business by text.** One question at a time: product, buyer, stage, which accounts you post from, what you've tried, your goal for the next 30 days.
+- **30-day challenge.** Starts when you first message. Every day has one outcome, and it remembers what you committed to.
+- **Morning check-ins.** At 8am your time (configurable), it texts you today's single most important thing.
+- **Build-in-public posts.** Drafts "Day N of 30" posts for X, LinkedIn or Threads in your voice, often two options, and says which is stronger. Each comes with a **tap-to-post** link that opens the composer pre-filled.
+- **Outreach coaching.** Who to target, cold email and DM copy, send timing, deliverability (seed tests, sender identity, bounces), follow-ups, and phone routes when email is blocked.
+- **Positioning and launch reviews.** Landing copy, pricing pages, Product Hunt, Hacker News and Reddit plans, and where each will get pushback.
+- **Competitor checks.** Uses web search to look up competitors and gives you the news straight, with links.
+- **Memory.** Keeps durable facts about you across weeks, stored as plain JSON on your server.
+
+## Channels
+
+| Channel | Provider | Webhook URL |
+|---|---|---|
+| WhatsApp | [Meta WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) | `{PUBLIC_URL}/webhooks/whatsapp` |
+| SMS and/or WhatsApp | [Twilio](https://www.twilio.com/docs/messaging) | `{PUBLIC_URL}/webhooks/twilio` |
+| iMessage | [BlueBubbles](https://bluebubbles.app) on a Mac | `{PUBLIC_URL}/webhooks/imessage?secret={WEBHOOK_SECRET}` |
+| Email | [Postmark](https://postmarkapp.com/developer/webhooks/inbound-webhook) inbound and outbound | `{PUBLIC_URL}/webhooks/email?secret={WEBHOOK_SECRET}` |
+| Browser (testing) | built in | `http://localhost:3000` |
+
+A channel turns on when its environment variables are set. Use any combination.
+
+## Quick start
+
+```bash
+git clone https://github.com/huangd-816/pitchside.git
+cd pitchside
+npm install
+cp .env.example .env      # add ANTHROPIC_API_KEY at minimum
+npm start                 # http://localhost:3000
+```
+
+Open the browser chat to try the coach before you wire up any messaging channel. To receive webhooks on your laptop, expose it with a tunnel (e.g. `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`) and set `PUBLIC_URL` to the tunnel address.
+
+Requires Node 20.12+ and an [Anthropic API key](https://console.anthropic.com). By default it uses `claude-opus-5`; set `PITCHSIDE_MODEL` to change it.
+
+## Setting up each channel
+
+### WhatsApp (Meta Cloud API)
+1. Create an app at developers.facebook.com, add the **WhatsApp** product, and get a phone number ID and a permanent access token.
+2. Set `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET` (App settings → Basic) and pick any `WHATSAPP_VERIFY_TOKEN`.
+3. In WhatsApp → Configuration, set the callback URL to `{PUBLIC_URL}/webhooks/whatsapp` with the same verify token, and subscribe to `messages`.
+
+WhatsApp only allows free-form business messages within 24 hours of the person's last message. Pitchside skips a morning check-in if that window has closed. To send check-ins anyway, you'd need an approved message template, which isn't included.
+
+### SMS / WhatsApp (Twilio)
+1. Buy a number (and/or enable the WhatsApp sender or sandbox).
+2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_WHATSAPP_FROM`, and `PUBLIC_URL`.
+3. Set the number's "A message comes in" webhook (HTTP POST) to `{PUBLIC_URL}/webhooks/twilio`.
+
+Requests are verified with Twilio's `X-Twilio-Signature`, so `PUBLIC_URL` must match exactly what Twilio calls.
+
+### iMessage (BlueBubbles)
+Apple doesn't offer an iMessage API. [BlueBubbles](https://bluebubbles.app) is an open-source server that runs on a Mac signed in to iMessage.
+1. Install the BlueBubbles server on an always-on Mac and enable the REST API with a password.
+2. Set `BLUEBUBBLES_URL` (e.g. `http://mac-mini.local:1234`), `BLUEBUBBLES_PASSWORD` and `WEBHOOK_SECRET`.
+3. In BlueBubbles → API & Webhooks, add a webhook for **New Messages** pointing at `{PUBLIC_URL}/webhooks/imessage?secret={WEBHOOK_SECRET}`.
+
+Group chats are ignored. Pitchside only replies in 1:1 conversations.
+
+### Email (Postmark)
+1. Create a Postmark server, verify your sending domain, and set `POSTMARK_SERVER_TOKEN` and `EMAIL_FROM`.
+2. Under Inbound, set the webhook URL to `{PUBLIC_URL}/webhooks/email?secret={WEBHOOK_SECRET}` and forward your coach address (e.g. `coach@yourdomain.com`) to the inbound address.
+
+Replies stay in the same thread. Auto-replies and mail from Pitchside's own address are ignored, so it never loops.
+
+## Things you can text it
+
+| Text | What happens |
+|---|---|
+| anything | coaching |
+| `timezone Europe/London` | sets your clock for check-ins and "Day N" |
+| `pause` / `resume` | turns morning check-ins off/on |
+| `restart challenge` | starts a new 30 days today |
+| `reset` | forgets the conversation and notes |
+| `help` | lists these |
+
+## How it works
+
+```
+WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*  (verify + normalise)
+                                                              │
+                                                              ▼
+                                                        src/coach.js  ── Claude (Messages API, web search)
+                                                              │           per-person memory + 30-day state
+                                                              ▼
+                                                        src/format.js  reply → bubbles, <post> → tap-to-post links
+                                                              │
+                                                              ▼
+                                                   channel.send(): one message per bubble, in order
+```
+
+- Webhooks are acknowledged immediately and the reply is sent asynchronously, because model calls outlast provider webhook timeouts.
+- Messages from one person are processed one at a time, and retried webhooks are de-duplicated by message ID.
+- Each person is one JSON file in `DATA_DIR`. Back it up, or swap `src/users.js` for a database.
+- The system prompt lives in `src/prompts.js`. Change the coach's personality there.
+- If the main model declines a request, the API's server-side fallback reruns it on another model in the same call.
+
+## Deploying
+
+Any host that runs Node and keeps a disk works (Railway, Fly.io, Render, a VPS). A `Dockerfile` is included and stores data in `/data`, so mount a volume there. On a public server, set `WEB_CHAT=0` so strangers can't use the browser chat on your API key.
+
+## Development
+
+```bash
+npm test        # node:test, no network or API key needed
+npm run dev     # restarts on file changes
+```
+
+## Contributing
+
+Issues and PRs are welcome. Good first contributions:
+- more channels (Telegram, Slack, Discord, other email providers like Resend or SendGrid)
+- a database-backed user store
+- WhatsApp message templates so check-ins work outside the 24-hour window
+- voice notes (transcribe inbound audio, reply with TTS)
+
+## Disclaimer
+
+Pitchside is an independent open-source project. It is not affiliated with, endorsed by, or derived from the code of any company or product.
+
+## License
+
+[MIT](LICENSE)
