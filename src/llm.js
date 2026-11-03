@@ -2,6 +2,7 @@
 // returning the reply text, so any provider can sit behind it:
 //   - Claude (Anthropic SDK) — best quality, supports web search
 //   - Gemini / Groq — free tiers via their OpenAI-compatible chat endpoints
+//   - Meta Llama API (optional) — Meta's OpenAI-compatible endpoint for Llama models
 // Several providers can be chained: on a rate limit or outage the next one answers.
 
 const MAX_PAUSE_CONTINUATIONS = 3;
@@ -46,6 +47,9 @@ export const FREE_PROVIDERS = {
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash' },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b' },
 };
+
+// Meta's Llama API, through its OpenAI-compatible endpoint. Optional; set LLAMA_API_KEY.
+export const META_PROVIDER = { baseUrl: 'https://api.llama.com/compat/v1', model: 'Llama-4-Maverick-17B-128E-Instruct-FP8' };
 
 /** Any OpenAI-compatible /chat/completions endpoint (Gemini, Groq, OpenRouter, a local Ollama…). */
 export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, maxTokens = 4000, fetchImpl = fetch }) {
@@ -101,7 +105,8 @@ export function chainLLM(providers, { log = console } = {}) {
 
 /**
  * Builds the provider chain from environment variables. Order: Claude (if a
- * key is set), then Gemini, then Groq. LLM_PROVIDERS=gemini,groq overrides it.
+ * key is set), then Gemini, Groq and Meta (Llama API), then a custom endpoint.
+ * LLM_PROVIDERS=gemini,groq,meta overrides it.
  */
 export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log } = {}) {
   const available = {
@@ -114,13 +119,16 @@ export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log } = {}) 
     groq: env.GROQ_API_KEY
       ? () => openaiCompatibleLLM({ name: 'groq', ...FREE_PROVIDERS.groq, model: env.GROQ_MODEL || FREE_PROVIDERS.groq.model, apiKey: env.GROQ_API_KEY, fetchImpl })
       : null,
+    meta: env.LLAMA_API_KEY
+      ? () => openaiCompatibleLLM({ name: 'meta', ...META_PROVIDER, baseUrl: env.LLAMA_BASE_URL || META_PROVIDER.baseUrl, model: env.LLAMA_MODEL || META_PROVIDER.model, apiKey: env.LLAMA_API_KEY, fetchImpl })
+      : null,
     custom: env.LLM_BASE_URL && env.LLM_MODEL
       ? () => openaiCompatibleLLM({ name: 'custom', baseUrl: env.LLM_BASE_URL, model: env.LLM_MODEL, apiKey: env.LLM_API_KEY ?? '', fetchImpl })
       : null,
   };
   const order = env.LLM_PROVIDERS
     ? env.LLM_PROVIDERS.split(',').map((s) => s.trim().toLowerCase())
-    : ['claude', 'gemini', 'groq', 'custom'];
+    : ['claude', 'gemini', 'groq', 'meta', 'custom'];
   const providers = order.filter((n) => available[n]).map((n) => available[n]());
   return providers.length ? chainLLM(providers, { log }) : null;
 }

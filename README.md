@@ -36,6 +36,7 @@ You don't need a paid API. Set any one of these (more than one = automatic fallb
 |---|---|---|---|
 | Google Gemini | free tier | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | default `gemini-2.5-flash` |
 | Groq | free tier | [console.groq.com/keys](https://console.groq.com/keys) | default `openai/gpt-oss-120b`, very fast |
+| Meta Llama API (optional) | see Meta | [llama.developer.meta.com](https://llama.developer.meta.com) | `LLAMA_API_KEY`, default `Llama-4-Maverick-17B-128E-Instruct-FP8`; override with `LLAMA_MODEL` |
 | Anthropic Claude | paid | [console.anthropic.com](https://console.anthropic.com) | best coaching quality; enables web-search competitor checks |
 | Anything OpenAI-compatible | varies | `LLM_BASE_URL` + `LLM_MODEL` | OpenRouter, a local Ollama, etc. |
 

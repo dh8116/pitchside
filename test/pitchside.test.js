@@ -285,6 +285,8 @@ test('llmFromEnv picks free providers from keys, Claude first when present', () 
   assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g' }).name, 'gemini (gemini-2.5-flash)');
   assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q' }).name, 'gemini (gemini-2.5-flash) → groq (openai/gpt-oss-120b)');
   assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q', LLM_PROVIDERS: 'groq' }).name, 'groq (openai/gpt-oss-120b)');
+  assert.equal(llmFromEnv({ LLAMA_API_KEY: 'm' }).name, 'meta (Llama-4-Maverick-17B-128E-Instruct-FP8)');
+  assert.equal(llmFromEnv({ GROQ_API_KEY: 'q', LLAMA_API_KEY: 'm', LLAMA_MODEL: 'x' }).name, 'groq (openai/gpt-oss-120b) → meta (x)');
   const withClaude = llmFromEnv({ ANTHROPIC_API_KEY: 'a', GROQ_API_KEY: 'q' }, { createAnthropicClient: () => ({}) });
   assert.match(withClaude.name, /^claude \(claude-opus-5\) → groq/);
   assert.equal(withClaude.supportsWebSearch, true);

@@ -21,6 +21,7 @@ if (!llm) {
   console.error(`No model provider configured. Add one of these to .env (free options first):
   GEMINI_API_KEY     free at https://aistudio.google.com/apikey
   GROQ_API_KEY       free at https://console.groq.com/keys
+  LLAMA_API_KEY      optional, Meta's Llama API: https://llama.developer.meta.com
   ANTHROPIC_API_KEY  paid, best quality, enables web search`);
   process.exit(1);
 }
