@@ -9,7 +9,8 @@ import { parseReply, bubbleToText, bubblesToEmail } from '../src/format.js';
 import { createCoach, challengeDay, buildMessages } from '../src/coach.js';
 import { createUserStore, newUser } from '../src/users.js';
 import { createApp } from '../src/app.js';
-import { anthropicLLM, openaiCompatibleLLM, chainLLM, llmFromEnv } from '../src/llm.js';
+import { anthropicLLM, openaiCompatibleLLM, metaLLM, chainLLM, llmFromEnv } from '../src/llm.js';
+import { createSearch, parseDuckDuckGo } from '../src/search.js';
 import { whatsappChannel } from '../src/channels/whatsapp.js';
 import { twilioChannel, twilioSignature } from '../src/channels/twilio.js';
 import { imessageChannel } from '../src/channels/imessage.js';
@@ -176,6 +177,88 @@ test('after day 30 the challenge keeps going: check-ins continue and the context
   assert.equal(await coach.runCheckins({ hour: 8 }), 1);
 });
 
+test('Meta Model API: Responses endpoint with web_search, sources appended, search dropped if rejected', async () => {
+  const sent = [];
+  const reply = { output: [{ type: 'web_search_call', status: 'completed' }, { type: 'message', content: [{ type: 'output_text', text: 'Rival raised a round.', annotations: [{ type: 'url_citation', url: 'https://a.example/x' }, { type: 'url_citation', url: 'https://a.example/x' }] }] }] };
+  const llm = metaLLM({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3',
+    fetchImpl: async (url, init) => { const body = JSON.parse(init.body); sent.push({ url, body, auth: init.headers.authorization }); return Response.json(reply); } });
+  const text = await llm.complete({ system: 'SYS', webSearch: true, messages: [{ role: 'user', content: 'who is the rival?', at: 'x' }] });
+  assert.equal(text, 'Rival raised a round.\n\nSources: https://a.example/x');
+  assert.equal(sent[0].url, 'https://api.meta.ai/v1/responses');
+  assert.equal(sent[0].auth, 'Bearer k');
+  assert.deepEqual(sent[0].body.tools, [{ type: 'web_search' }]);
+  assert.deepEqual(sent[0].body.input, [{ role: 'developer', content: 'SYS' }, { role: 'user', content: 'who is the rival?' }]);
+  await llm.complete({ system: 'SYS', webSearch: false, messages: [] });
+  assert.equal(sent[1].body.tools, undefined);
+
+  const calls = [];
+  const picky = metaLLM({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1', model: 'm', fetchImpl: async (url, init) => {
+    const body = JSON.parse(init.body); calls.push(body.tools ? 'with' : 'without');
+    return body.tools ? new Response('no tools', { status: 400 }) : Response.json({ output_text: 'plain answer' });
+  } });
+  assert.equal(await picky.complete({ system: 's', webSearch: true, messages: [] }), 'plain answer');
+  assert.deepEqual(calls, ['with', 'without']);
+  await picky.complete({ system: 's', webSearch: true, messages: [] });
+  assert.deepEqual(calls, ['with', 'without', 'without']);
+});
+
+test('search tool for OpenAI-compatible models: runs the tool call, feeds results back, survives offline', async () => {
+  const bodies = [];
+  const answers = [
+    { choices: [{ message: { content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'web_search', arguments: '{"query":"acme pricing"}' } }] } }] },
+    { choices: [{ message: { content: 'Acme charges $20.' } }] },
+  ];
+  const queries = [];
+  const llm = openaiCompatibleLLM({ name: 'groq', baseUrl: 'https://x/v1', apiKey: 'k', model: 'm',
+    search: async (q) => { queries.push(q); return '1. Acme\nhttps://acme.example\n$20/mo'; },
+    fetchImpl: async (url, init) => { bodies.push(JSON.parse(init.body)); return Response.json(answers.shift()); } });
+  assert.equal(llm.supportsWebSearch, true);
+  assert.equal(await llm.complete({ system: 'S', webSearch: true, messages: [{ role: 'user', content: 'acme?' }] }), 'Acme charges $20.');
+  assert.deepEqual(queries, ['acme pricing']);
+  assert.equal(bodies[0].tools[0].function.name, 'web_search');
+  assert.deepEqual(bodies[1].messages.at(-1), { role: 'tool', tool_call_id: 't1', content: '1. Acme\nhttps://acme.example\n$20/mo' });
+
+  // A model that rejects tools is retried as plain chat, and remembered.
+  let n = 0;
+  const noTools = openaiCompatibleLLM({ name: 'ollama', baseUrl: 'http://x/v1', apiKey: 'k', model: 'm', search: async () => 'x',
+    fetchImpl: async (url, init) => { n++; return JSON.parse(init.body).tools ? new Response('tools unsupported', { status: 400 }) : Response.json({ choices: [{ message: { content: 'ok' } }] }); } });
+  assert.equal(await noTools.complete({ system: 's', webSearch: true, messages: [] }), 'ok');
+  await noTools.complete({ system: 's', webSearch: true, messages: [] });
+  assert.equal(n, 3);
+
+  // No search function, or search switched off: no tools offered at all.
+  const plain = openaiCompatibleLLM({ name: 'g', baseUrl: 'https://x/v1', apiKey: 'k', model: 'm', fetchImpl: async (u, init) => { bodies.push(JSON.parse(init.body)); return Response.json({ choices: [{ message: { content: 'hi' } }] }); } });
+  assert.equal(plain.supportsWebSearch, false);
+  await plain.complete({ system: 's', webSearch: true, messages: [] });
+  assert.equal(bodies.at(-1).tools, undefined);
+});
+
+test('web search backends: Brave, Tavily, DuckDuckGo parsing, and a graceful offline message', async () => {
+  const brave = createSearch({ env: { BRAVE_API_KEY: 'b' }, fetchImpl: async (url, init) => {
+    assert.match(url, /api\.search\.brave\.com.*q=acme%20pricing/); assert.equal(init.headers['x-subscription-token'], 'b');
+    return Response.json({ web: { results: [{ title: 'Acme <b>Pricing</b>', url: 'https://acme.example/p', description: 'From $20' }] } });
+  } });
+  assert.equal(await brave('acme pricing'), '1. Acme Pricing\nhttps://acme.example/p\nFrom $20');
+  const tavily = createSearch({ env: { TAVILY_API_KEY: 't' }, fetchImpl: async (url, init) => {
+    assert.equal(url, 'https://api.tavily.com/search'); assert.equal(JSON.parse(init.body).query, 'x');
+    return Response.json({ results: [{ title: 'T', url: 'https://t.example', content: 'body' }] });
+  } });
+  assert.match(await tavily('x'), /https:\/\/t\.example/);
+  const html = '<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fa.example%2Fpage&amp;rut=1">A <b>page</b></a><a class="result__snippet" href="#">Some &amp; snippet</a>';
+  assert.deepEqual(parseDuckDuckGo(html), [{ title: 'A page', url: 'https://a.example/page', snippet: 'Some & snippet' }]);
+  const offline = createSearch({ env: {}, fetchImpl: async () => { throw new TypeError('fetch failed'); } });
+  assert.match(await offline('anything'), /unavailable right now \(offline or blocked\)/);
+  assert.equal(await offline('  '), 'No query given.');
+});
+
+test('Ollama runs locally with no key, and the order puts Meta first', () => {
+  const ollama = llmFromEnv({ OLLAMA_MODEL: 'llama3.1' });
+  assert.equal(ollama.name, 'ollama (llama3.1)');
+  assert.equal(ollama.supportsWebSearch, true);
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', OLLAMA_MODEL: 'llama3.1', MODEL_API_KEY: 'm' }).name, 'meta (muse-spark-1.3) → gemini (gemini-2.5-flash) → ollama (llama3.1)');
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', OLLAMA_MODEL: 'llama3.1', LLM_PROVIDERS: 'ollama,gemini' }).name, 'ollama (llama3.1) → gemini (gemini-2.5-flash)');
+});
+
 test('WhatsApp Cloud webhook: verify handshake, signature check, message parsing', () => {
   const ch = whatsappChannel({ token: 't', phoneNumberId: 'p', verifyToken: 'vt', appSecret: 'sec' });
   const url = new URL('http://h/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=vt&hub.challenge=42');
@@ -286,7 +369,7 @@ test('llmFromEnv picks free providers from keys, Claude first when present', () 
   assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q' }).name, 'gemini (gemini-2.5-flash) → groq (openai/gpt-oss-120b)');
   assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', GROQ_API_KEY: 'q', LLM_PROVIDERS: 'groq' }).name, 'groq (openai/gpt-oss-120b)');
   assert.equal(llmFromEnv({ MODEL_API_KEY: 'm' }).name, 'meta (muse-spark-1.3)');
-  assert.equal(llmFromEnv({ GROQ_API_KEY: 'q', META_API_KEY: 'm', META_MODEL: 'muse-wonder-1.0' }).name, 'groq (openai/gpt-oss-120b) → meta (muse-wonder-1.0)');
+  assert.equal(llmFromEnv({ GROQ_API_KEY: 'q', META_API_KEY: 'm', META_MODEL: 'muse-wonder-1.0' }).name, 'meta (muse-wonder-1.0) → groq (openai/gpt-oss-120b)');
   const withClaude = llmFromEnv({ ANTHROPIC_API_KEY: 'a', GROQ_API_KEY: 'q' }, { createAnthropicClient: () => ({}) });
   assert.match(withClaude.name, /^claude \(claude-opus-5\) → groq/);
   assert.equal(withClaude.supportsWebSearch, true);

@@ -33,6 +33,14 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .contact { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 12px; }
 .contact img { border-radius: 50%; }
 .contact strong { font-weight: 500; }
+.link.chats-btn { justify-self: start; }
+.sessions { position: absolute; top: 62px; left: 10px; z-index: 5; width: min(320px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 18px 40px -18px rgb(0 0 0 / .3); padding: 6px; }
+.sessions[hidden] { display: none; }
+.sessions button { display: block; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px; }
+.sessions button:hover, .sessions button[aria-current="true"] { background: var(--green-soft); }
+.sessions b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sessions small { color: var(--muted); }
+.sessions p { margin: 8px 12px; color: var(--muted); font-size: 14px; }
 .link { justify-self: end; color: var(--green-dark); font-size: 16px; padding: 6px; }
 
 .scroll { flex: 1; min-height: 0; overflow-y: auto; }

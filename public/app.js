@@ -11,6 +11,7 @@ const CHIPS = [
 ];
 
 let busy = false;
+const SESSIONS_KEY = 'pitchside.sessions';
 
 function loadId() {
   try {
@@ -20,6 +21,19 @@ function loadId() {
   } catch { return crypto.randomUUID(); }
 }
 let webId = loadId();
+
+// Earlier conversations. The text lives on the server (per id); the browser only remembers the list.
+function loadSessions() {
+  try { const list = JSON.parse(localStorage.getItem(SESSIONS_KEY) ?? '[]'); return Array.isArray(list) ? list : []; } catch { return []; }
+}
+function saveSessions(list) { try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list.slice(0, 30))); } catch {} }
+function touchSession(id, title) {
+  const list = loadSessions();
+  const found = list.find((s) => s.id === id);
+  if (found) found.at = Date.now();
+  else list.unshift({ id, title: (title || 'New chat').slice(0, 60), at: Date.now() });
+  saveSessions(list.sort((a, b) => b.at - a.at));
+}
 
 // Only needed when the server sets WEB_CHAT_PASSWORD. Remembered on this device.
 let passcode = '';
@@ -120,6 +134,7 @@ async function run(request) {
 function send(text) {
   text = text.trim();
   if (busy || !text) return;
+  touchSession(webId, text);
   addMessage('out', { type: 'text', text });
   run(() => api('/api/web/chat', { id: webId, text }));
 }
@@ -154,10 +169,41 @@ async function restore() {
   $('gate').hidden = true;
   $('input').disabled = false;
   $('send').disabled = false;
-  for (const m of (await res.json()).messages) {
+  const { messages } = await res.json();
+  for (const m of messages) {
     if (m.role === 'user') addMessage('out', { type: 'text', text: m.text });
     else m.bubbles.forEach((b) => addMessage('in', b));
   }
+  // A conversation from before the Chats list existed still gets an entry.
+  const first = messages.find((m) => m.role === 'user');
+  if (first && !loadSessions().some((s) => s.id === webId)) touchSession(webId, first.text);
+}
+
+function renderSessions() {
+  const nav = $('sessions');
+  const list = loadSessions();
+  nav.replaceChildren();
+  if (!list.length) nav.append(el('p', { textContent: 'No earlier chats yet. Send a message and it shows up here.' }));
+  for (const s of list) {
+    const btn = el('button', { type: 'button' }, el('b', { textContent: s.title }), el('small', { textContent: new Date(s.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }));
+    if (s.id === webId) btn.setAttribute('aria-current', 'true');
+    btn.onclick = () => openSession(s.id);
+    nav.append(btn);
+  }
+}
+
+function toggleSessions(open = $('sessions').hidden) {
+  if (open) renderSessions();
+  $('sessions').hidden = !open;
+  $('chats').setAttribute('aria-expanded', String(open));
+}
+
+async function openSession(id) {
+  toggleSessions(false);
+  if (busy || id === webId) return;
+  webId = id;
+  try { localStorage.setItem(STORAGE_KEY, webId); } catch {}
+  await restore().catch(() => {});
 }
 
 $('form').onsubmit = (e) => { e.preventDefault(); const t = $('input').value; $('input').value = ''; $('input').style.height = 'auto'; send(t); };
@@ -165,7 +211,11 @@ $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); }
 });
 $('input').addEventListener('input', () => { const t = $('input'); t.style.height = 'auto'; t.style.height = `${t.scrollHeight}px`; });
+$('chats').onclick = () => toggleSessions();
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleSessions(false); });
+document.addEventListener('click', (e) => { if (!e.target.closest('#sessions, #chats')) toggleSessions(false); });
 $('new').onclick = () => {
+  toggleSessions(false);
   webId = crypto.randomUUID();
   try { localStorage.setItem(STORAGE_KEY, webId); } catch {}
   reset();

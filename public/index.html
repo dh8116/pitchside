@@ -12,13 +12,15 @@
 </head>
 <body>
   <header class="top">
-    <span></span>
+    <button id="chats" class="link chats-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Earlier conversations">Chats</button>
     <div class="contact">
       <img src="favicon.svg" alt="" width="44" height="44">
       <strong>Pitchside</strong>
     </div>
     <button id="new" class="link" title="Start a new conversation">New</button>
   </header>
+
+  <nav id="sessions" class="sessions" hidden aria-label="Earlier conversations"></nav>
 
   <main id="scroll" class="scroll">
     <div class="column">

@@ -28,19 +28,28 @@ Pitchside:  Two hours of silence means nothing yet. The bounce is the thing to f
 - **Memory.** Keeps durable facts about you across weeks, stored as plain JSON on your server.
 - **Built-in playbooks.** The coach carries a written knowledge base (`src/knowledge.js`) covering the 30-day challenge structure, finding the decision-maker, cold email, deliverability and seed tests, build-in-public posts, positioning, launches (Product Hunt, Hacker News, Reddit), competitors and early pricing. It's plain prose, so edit it to teach the coach your own playbook.
 
-## Runs on free models
+## Models: built on the Meta Model API, runs on free and local ones too
 
-You don't need a paid API. Set any one of these (more than one = automatic fallback when one is rate-limited):
+Pitchside is built around the [Meta Model API](https://dev.meta.ai/docs): **Muse Spark** and **Muse Wonder** do the coaching, and Meta's built-in **web search** (search grounding) handles competitor and launch checks. Set any one provider below; with more than one, they chain as automatic fallbacks in this order when one is rate-limited or down (`LLM_PROVIDERS` overrides the order):
 
 | Provider | Cost | Key | Notes |
 |---|---|---|---|
+| **Meta Model API** | see Meta | [dev.meta.ai/docs](https://dev.meta.ai/docs) | `MODEL_API_KEY`. Default `muse-spark-1.3`; `META_MODEL=muse-wonder-1.0` for Muse Wonder. Web search is built in. Avoid `-contributor` models: Meta may use prompts to improve its products |
+| Anthropic Claude | paid | [console.anthropic.com](https://console.anthropic.com) | `ANTHROPIC_API_KEY`. Searches the web by itself |
 | Google Gemini | free tier | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | default `gemini-2.5-flash` |
 | Groq | free tier | [console.groq.com/keys](https://console.groq.com/keys) | default `openai/gpt-oss-120b`, very fast |
-| Meta Model API (optional) | see Meta | [dev.meta.ai/docs](https://dev.meta.ai/docs) | `MODEL_API_KEY`, default `muse-spark-1.3`; set `META_MODEL=muse-wonder-1.0` for Muse Wonder. Avoid `-contributor` models: Meta may use prompts to improve its products |
-| Anthropic Claude | paid | [console.anthropic.com](https://console.anthropic.com) | best coaching quality; enables web-search competitor checks |
-| Anything OpenAI-compatible | varies | `LLM_BASE_URL` + `LLM_MODEL` | OpenRouter, a local Ollama, etc. |
+| **Ollama (offline)** | free | [ollama.com](https://ollama.com) | `OLLAMA_MODEL=llama3.1`. A model on your own machine: no key, no internet |
+| Anything OpenAI-compatible | varies | `LLM_BASE_URL` + `LLM_MODEL` | OpenRouter, LM Studio, etc. |
 
 Free tiers have rate limits, which is fine for one person or a small group.
+
+### Web search and working offline
+- **Meta and Claude search the web natively.** Pitchside turns it on for competitor checks, launch research and pricing questions. `PITCHSIDE_WEB_SEARCH=0` turns it off.
+- **Gemini, Groq and Ollama get a `web_search` tool** that Pitchside runs for them. It uses `BRAVE_API_KEY` or `TAVILY_API_KEY` if set (both have free tiers), otherwise a keyless DuckDuckGo lookup (best effort).
+- **Offline works.** Run Ollama and set `OLLAMA_MODEL`: coaching, memory, check-ins and the browser chat need no internet. Searching just says it's unavailable and the coach answers from what it knows.
+
+### Chat history and sessions
+Every conversation is saved on your server (in `DATA_DIR`), so the browser chat restores it on reload. The **Chats** button lists your earlier conversations and reopens any of them; **New** starts a fresh one. On a host that restarts, mount a volume at `DATA_DIR` so history survives.
 
 ## Channels
 
@@ -60,7 +69,8 @@ A channel turns on when its environment variables are set. Use any combination.
 git clone https://github.com/dh8116/pitchside.git
 cd pitchside
 npm install
-cp .env.example .env      # add GEMINI_API_KEY or GROQ_API_KEY (both free)
+cp .env.example .env      # add MODEL_API_KEY (Meta Model API), or a free GEMINI_API_KEY / GROQ_API_KEY,
+                          # or OLLAMA_MODEL to run offline
                           # or fill it in with the .env builder (below)
 npm start                 # http://localhost:3000
 ```
@@ -69,7 +79,7 @@ Open the browser chat to try the coach before you wire up any messaging channel.
 
 Requires Node 20.12+ and one model key (see the table above).
 
-**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/setup/) loads this repo's `.env.example`, explains every setting, generates secrets in one click, and gives you a finished `.env` to copy or download. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
+**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/setup/) loads this repo's `.env.example`, explains every setting with a link and a short "How to get this" guide for each key, generates secrets in one click, and gives you a finished `.env` to copy or download, then an **Open the app** button takes you straight to the browser chat once a model is set. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
 
 ## "I just want to message it": the 15-minute setup
 

@@ -83,6 +83,20 @@
     .row input::placeholder { color: #a3a3a3; }
     .field.filled .row input { border-color: #9fd9c6; }
 
+    details.guide { margin: 2px 0 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    details.guide > summary { cursor: pointer; list-style: none; padding: 8px 12px; font-size: 13px; font-weight: 700; color: var(--accent-strong); display: flex; justify-content: space-between; gap: 8px; }
+    details.guide > summary::-webkit-details-marker { display: none; }
+    details.guide > summary::after { content: "▾"; color: var(--muted); transition: transform .15s; }
+    details.guide:not([open]) > summary::after { transform: rotate(-90deg); }
+    details.guide .body { padding: 2px 14px 12px; font-size: 13.5px; color: var(--text); }
+    details.guide ol { margin: 6px 0 10px; padding-left: 20px; }
+    details.guide li { margin: 3px 0; }
+    details.guide code { background: var(--raised); border-radius: 6px; padding: 1px 5px; font: 12.5px var(--mono); }
+    details.guide .note { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+    .launch { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+    .launch .btn { text-decoration: none; }
+    .launch .btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+    .launch p { margin: 0; font-size: 12.5px; color: var(--muted); }
     aside.out { position: sticky; top: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
     @media (max-width: 920px) { aside.out { position: static; } }
     .out-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -135,6 +149,10 @@
           <button class="btn small primary" type="button" id="download">Download</button>
         </div>
         <div class="status" id="status"></div>
+        <div class="launch" id="launch" hidden>
+          <a class="btn primary" id="open-app" href="#" target="_blank" rel="noopener" aria-disabled="true">Open the app →</a>
+          <p id="launch-hint"></p>
+        </div>
         <pre id="output"></pre>
         <div class="privacy">
           <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm-1 14-4-4 1.4-1.4L11 13.2l4.6-4.6L17 10l-6 6Z"/></svg>
@@ -154,16 +172,52 @@ const DEFAULT_REPO = 'dh8116/pitchside';
 // Extra knowledge for Pitchside's variables. Other repos get the generic parser only.
 const PRESETS = {
   'dh8116/pitchside': {
-    oneOf: [{ keys: ['GEMINI_API_KEY', 'GROQ_API_KEY', 'MODEL_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_BASE_URL'], label: 'a model key (Gemini and Groq are free)' }],
+    oneOf: [{ keys: ['MODEL_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'OLLAMA_MODEL', 'LLM_BASE_URL'], label: 'a model: a key (Gemini and Groq are free) or a local Ollama model' }],
+    launchKeys: ['PORT', 'PUBLIC_URL'],
     generate: ['WEBHOOK_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'WEB_CHAT_PASSWORD'],
     groupNotes: {
       'Channels': 'Everything below is optional: a channel switches on when its values are filled. The browser test chat works with only a model key.',
       'Auto-posting': 'Optional. Lets Pitchside publish the posts it drafts. Leave POST_OWNERS empty and nobody can post.',
     },
+
+    guides: (() => {
+      const meta = Object.freeze({ url: 'https://developers.facebook.com/apps', label: 'Open Meta for Developers' });
+      const x = { url: 'https://developer.x.com/en/portal/dashboard', label: 'Open the X developer portal', steps: ['Create a project and an app, then open the app\'s settings.', 'Under "User authentication settings", set permissions to Read and Write.', 'Open "Keys and tokens": copy the API Key and Secret, then generate the Access Token and Secret (regenerate them after changing permissions).', 'Fill in all four X_ values.'] };
+      const twilio = { url: 'https://console.twilio.com', label: 'Open the Twilio console', steps: ['Sign in, then copy the Account SID and Auth Token from the dashboard.', 'Buy an SMS number, or enable the WhatsApp sandbox, under Messaging.', 'Set the number\'s "A message comes in" webhook (HTTP POST) to your PUBLIC_URL + /webhooks/twilio.'] };
+      const whatsapp = { url: meta.url, label: meta.label, steps: ['Create an app, choose "Business", and add the WhatsApp product.', 'In WhatsApp → API Setup, copy the temporary token and the phone number ID. For production create a permanent system-user token.', 'Add your own phone as an allowed recipient (the free test number can message up to 5 numbers).', 'In WhatsApp → Configuration, set the callback URL to PUBLIC_URL + /webhooks/whatsapp, use your verify token, and subscribe to "messages".'] };
+      return {
+        MODEL_API_KEY: { url: 'https://dev.meta.ai/docs', label: 'Open the Meta Model API docs', steps: ['Open the Meta Model API docs and sign in.', 'Follow the setup page to create an API key.', 'Paste it here. Pitchside sends it as a Bearer token to https://api.meta.ai/v1.', 'The default model is muse-spark-1.3. To use Muse Wonder, set META_MODEL=muse-wonder-1.0.'], note: 'Avoid the "-contributor" models: Meta may use prompts and replies to improve its products. Web search is built in.' },
+        META_MODEL: { url: 'https://dev.meta.ai/docs/models', label: 'See the model list', steps: ['Pick a model ID: muse-spark-1.3, muse-spark-1.2 or muse-wonder-1.0.', 'Leave this empty to use muse-spark-1.3.'], note: 'The list of models enabled for your account is at GET https://api.meta.ai/v1/models.' },
+        GEMINI_API_KEY: { url: 'https://aistudio.google.com/apikey', label: 'Open Google AI Studio', steps: ['Sign in with a Google account.', 'Click "Create API key" and choose a project.', 'Copy the key and paste it here.'], note: 'The free tier has rate limits. That is fine for one person or a small group.' },
+        GROQ_API_KEY: { url: 'https://console.groq.com/keys', label: 'Open the Groq console', steps: ['Sign in to the Groq console.', 'Click "Create API Key", give it a name and copy it.', 'Paste it here.'], note: 'Free tier, very fast.' },
+        ANTHROPIC_API_KEY: { url: 'https://console.anthropic.com/settings/keys', label: 'Open the Anthropic console', steps: ['Sign in and add billing (this one is paid).', 'Create an API key and copy it.', 'Paste it here.'], note: 'Best coaching quality. Claude searches the web by itself for competitor checks.' },
+        OLLAMA_MODEL: { url: 'https://ollama.com/download', label: 'Download Ollama', steps: ['Install Ollama and start it.', 'In a terminal run: ollama pull llama3.1', 'Type llama3.1 here (or the name of any model you pulled).', 'Keep Ollama running when you start Pitchside.'], note: 'No key, and it works with no internet. Searching the web simply reports "unavailable" while offline.' },
+        BRAVE_API_KEY: { url: 'https://brave.com/search/api', label: 'Open Brave Search API', steps: ['Create an account and subscribe to the free plan.', 'Copy your API key and paste it here.'], note: 'Only used for Gemini, Groq and Ollama. Claude and Meta search by themselves.' },
+        TAVILY_API_KEY: { url: 'https://tavily.com', label: 'Open Tavily', steps: ['Sign up and copy your API key from the dashboard.', 'Paste it here.'], note: 'An alternative to Brave. If you set neither, Pitchside tries a keyless DuckDuckGo lookup.' },
+        LLM_BASE_URL: { url: 'https://openrouter.ai/keys', label: 'Example: OpenRouter keys', steps: ['Use the base URL of any OpenAI-compatible service, for example https://openrouter.ai/api/v1.', 'Fill in LLM_MODEL and LLM_API_KEY from that service.'] },
+        PUBLIC_URL: { url: 'https://railway.com', label: 'Open Railway', steps: ['Deployed: use the https address your host gives you (Railway, Render, Fly.io).', 'On your laptop: run cloudflared tunnel --url http://localhost:3000 (or ngrok http 3000) and use the address it prints.', 'It must match exactly what Twilio and Meta call.'], note: 'Only needed for WhatsApp, SMS, iMessage and email. The browser chat works without it.' },
+        WEBHOOK_SECRET: { steps: ['Click Generate. Any long random string works.', 'It is added to the end of the iMessage and email webhook URLs as ?secret=…'] },
+        WEB_CHAT_PASSWORD: { steps: ['Click Generate, or pick something long.', 'On a public server this passcode protects the browser chat and your model key.', 'Leave it empty only on your own laptop.'] },
+        WHATSAPP_TOKEN: whatsapp, WHATSAPP_PHONE_NUMBER_ID: whatsapp, WHATSAPP_APP_SECRET: { url: meta.url, label: meta.label, steps: ['Open your app, then App settings → Basic.', 'Click "Show" next to App secret and copy it.'] },
+        WHATSAPP_VERIFY_TOKEN: { steps: ['Click Generate.', 'Paste the same value into WhatsApp → Configuration → Verify token.'] },
+        TWILIO_ACCOUNT_SID: twilio, TWILIO_AUTH_TOKEN: twilio, TWILIO_SMS_FROM: twilio, TWILIO_WHATSAPP_FROM: twilio,
+        BLUEBUBBLES_URL: { url: 'https://bluebubbles.app', label: 'Open BlueBubbles', steps: ['Install the BlueBubbles server on an always-on Mac signed in to iMessage.', 'Enable the REST API and set a password.', 'Use the server\'s address here, for example http://mac-mini.local:1234.', 'In API & Webhooks add a "New Messages" webhook pointing at PUBLIC_URL + /webhooks/imessage?secret=YOUR_WEBHOOK_SECRET.'] },
+        BLUEBUBBLES_PASSWORD: { url: 'https://bluebubbles.app', label: 'Open BlueBubbles', steps: ['It is the REST API password you set in the BlueBubbles server settings.'] },
+        POSTMARK_SERVER_TOKEN: { url: 'https://account.postmarkapp.com', label: 'Open Postmark', steps: ['Create a server and verify your sending domain.', 'Open the server → API Tokens and copy the Server API token.', 'Under Inbound, set the webhook URL to PUBLIC_URL + /webhooks/email?secret=YOUR_WEBHOOK_SECRET.'] },
+        EMAIL_FROM: { url: 'https://account.postmarkapp.com', label: 'Open Postmark', steps: ['Use an address on the domain you verified, for example Pitchside <coach@yourdomain.com>.'] },
+        POST_OWNERS: { steps: ['List who may make Pitchside publish: your phone number, email, or web for the browser chat.', 'Separate several with commas. Nobody else can post.'] },
+        X_API_KEY: x, X_API_SECRET: x, X_ACCESS_TOKEN: x, X_ACCESS_TOKEN_SECRET: x,
+        LINKEDIN_ACCESS_TOKEN: { url: 'https://www.linkedin.com/developers/apps', label: 'Open LinkedIn developers', steps: ['Create an app and request the "Share on LinkedIn" product.', 'Generate an OAuth access token with the w_member_social scope (w_organization_social for a company page).', 'Paste the token here.'] },
+        LINKEDIN_AUTHOR: { url: 'https://www.linkedin.com/developers/apps', label: 'Open LinkedIn developers', steps: ['Use urn:li:person:<id> for your profile, or urn:li:organization:<id> for a company page.'] },
+        BLUESKY_HANDLE: { url: 'https://bsky.app/settings/app-passwords', label: 'Open Bluesky settings', steps: ['Your handle, for example you.bsky.social.'] },
+        BLUESKY_APP_PASSWORD: { url: 'https://bsky.app/settings/app-passwords', label: 'Open Bluesky app passwords', steps: ['Open Settings → Privacy and security → App passwords.', 'Add an app password and copy it. Do not use your real password.'] },
+      };
+    })(),
     help: {
+      MODEL_API_KEY: 'Meta Model API (Muse Spark / Muse Wonder). Used first when set, with built-in web search. Docs and keys: https://dev.meta.ai/docs',
+      OLLAMA_MODEL: 'Works offline: runs a model on your own machine. Needs Ollama running, https://ollama.com',
       GEMINI_API_KEY: 'Free. Create one at https://aistudio.google.com/apikey',
       GROQ_API_KEY: 'Free and very fast. Create one at https://console.groq.com/keys',
-      MODEL_API_KEY: 'Optional. Meta Model API (Muse Spark / Muse Wonder), used as another fallback. Docs and keys: https://dev.meta.ai/docs',
       ANTHROPIC_API_KEY: 'Paid. Best coaching quality and turns on web search for competitor checks. https://console.anthropic.com',
       PUBLIC_URL: 'The https address your server is reachable at (your Railway/Render URL, or a cloudflared/ngrok tunnel). Must match exactly what Twilio calls.',
       WEBHOOK_SECRET: 'Any long random string. Hit Generate. It goes on the end of the iMessage and email webhook URLs as ?secret=…',
@@ -302,6 +356,25 @@ function renderStatus() {
   const filled = model.vars.filter((v) => values.get(v.key)).length;
   st.className = `status ${missing.length ? 'todo' : 'ok'}`;
   st.textContent = missing.length ? `Still needed: ${missing.join(', ')}. ${filled} of ${model.vars.length} filled.` : `${filled} of ${model.vars.length} filled. Ready to save.`;
+  renderLaunch(preset, missing.length === 0);
+}
+
+// Once the main settings are in, offer a straight way into the browser app.
+function renderLaunch(preset, ready) {
+  const box = $('launch');
+  box.hidden = !preset?.launchKeys;
+  if (box.hidden) return;
+  const pub = (values.get('PUBLIC_URL') || '').replace(/\/$/, '');
+  const port = /^\d{2,5}$/.test(values.get('PORT') || '') ? values.get('PORT') : '3000';
+  const deployed = /^https?:\/\//.test(pub);
+  const url = deployed ? pub : `http://localhost:${port}`;
+  const a = $('open-app');
+  a.href = ready ? url : '#';
+  a.setAttribute('aria-disabled', String(!ready));
+  a.textContent = deployed ? 'Open your deployed app →' : 'Open the app →';
+  $('launch-hint').textContent = !ready ? 'Add a model first (Meta, Gemini, Groq, Claude or a local Ollama model) and this button turns on.'
+    : deployed ? `Opens ${url}. Make sure the server has this .env and is running.`
+    : `Download the .env into the project folder, run npm start, then click this to open the chat at ${url}.`;
 }
 
 // ── Form ──────────────────────────────────────────────────────────────────
@@ -311,6 +384,23 @@ function linkified(text) {
     frag.append(i % 2 ? Object.assign(document.createElement('a'), { href: part, textContent: part, target: '_blank', rel: 'noopener noreferrer' }) : part);
   });
   return frag;
+}
+
+function renderGuide(g) {
+  const d = document.createElement('details');
+  d.className = 'guide';
+  d.append(Object.assign(document.createElement('summary'), { textContent: 'How to get this' }));
+  const body = document.createElement('div');
+  body.className = 'body';
+  if (g.steps?.length) {
+    const ol = document.createElement('ol');
+    for (const step of g.steps) { const li = document.createElement('li'); li.append(linkified(step)); ol.append(li); }
+    body.append(ol);
+  }
+  if (g.url) body.append(Object.assign(document.createElement('a'), { className: 'btn small primary', href: g.url, target: '_blank', rel: 'noopener noreferrer', textContent: `${g.label || 'Open'} ↗`, style: 'text-decoration:none' }));
+  if (g.note) body.append(Object.assign(document.createElement('p'), { className: 'note', textContent: g.note }));
+  d.append(body);
+  return d;
 }
 
 function renderForm() {
@@ -345,6 +435,9 @@ function renderForm() {
       field.append(head);
       const help = preset?.help?.[v.key] || v.help;
       if (help) { const p = document.createElement('p'); p.className = 'help'; p.append(linkified(help)); field.append(p); }
+
+      const guide = preset?.guides?.[v.key];
+      if (guide) field.append(renderGuide(guide));
 
       const row = document.createElement('div');
       row.className = 'row';
@@ -458,7 +551,7 @@ $('download').onclick = () => {
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: '.env' });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  $('notice').textContent = 'Saved. Some browsers rename dotfiles to "env" or "_env"; if so, rename it to .env and put it in the project folder. Never commit it.';
+  $('notice').textContent = 'Saved. Next: run npm start in the project folder, then use “Open the app” above. Some browsers rename dotfiles to "env" or "_env"; if so, rename it to .env and put it in the project folder. Never commit it.';
   $('notice').hidden = false;
 };
 window.addEventListener('beforeunload', (e) => { if (values.size) e.preventDefault(); });

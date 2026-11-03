@@ -21,7 +21,8 @@ if (!llm) {
   console.error(`No model provider configured. Add one of these to .env (free options first):
   GEMINI_API_KEY     free at https://aistudio.google.com/apikey
   GROQ_API_KEY       free at https://console.groq.com/keys
-  MODEL_API_KEY      optional, Meta Model API (Muse Spark / Wonder): https://dev.meta.ai/docs
+  MODEL_API_KEY      Meta Model API (Muse Spark / Wonder): https://dev.meta.ai/docs
+  OLLAMA_MODEL       a local model, works offline: https://ollama.com
   ANTHROPIC_API_KEY  paid, best quality, enables web search`);
   process.exit(1);
 }
