@@ -80,6 +80,7 @@ const handler = createApp({
   channels,
   publicDir: path.join(here, 'public'),
   webChat: env.WEB_CHAT !== '0',
+  webChatPassword: env.WEB_CHAT_PASSWORD ?? '',
 });
 
 http.createServer(handler).listen(port, () => {
@@ -87,6 +88,11 @@ http.createServer(handler).listen(port, () => {
   console.log(`Pitchside is running at http://localhost:${port}`);
   console.log(`Model: ${llm.name}`);
   console.log(`Channels: ${on.length ? on.join(', ') : 'none configured (web chat only)'}`);
+  if (env.WEB_CHAT !== '0') {
+    console.log(env.WEB_CHAT_PASSWORD
+      ? 'Browser chat: on, passcode required'
+      : 'Browser chat: on with no passcode. Fine on your laptop; set WEB_CHAT_PASSWORD before deploying.');
+  }
   if (publisher) console.log(`Auto-posting: ${Object.keys(posters).join(', ')} for ${postOwners.length} owner(s), ${env.AUTO_POST === '1' ? 'immediately' : 'after "post it"'}`);
   else if (Object.keys(posters).length) console.log('Auto-posting: platform keys found but POST_OWNERS is empty, so nobody can post');
 });

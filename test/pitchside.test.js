@@ -413,3 +413,30 @@ test('platform clients: X OAuth 1.0a signing, LinkedIn escaping, Bluesky facets'
   assert.equal(calls[1][1].record.text, 'hi');
   await assert.rejects(bs.post('x'.repeat(301)), /300 characters/);
 });
+
+test('browser chat passcode: required when set, locks out after repeated wrong guesses', async () => {
+  const users = await tmpStore();
+  const coach = createCoach({ llm: anthropicLLM(fakeClient(['Hi.'])), users });
+  let clock = 0;
+  const app = createApp({ coach, users, channels: {}, publicDir: path.resolve('public'), webChatPassword: 's3cret', log: { error() {} }, now: () => clock });
+  const server = http.createServer(app).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const id = '11111111-2222-3333-4444-555555555555';
+  const hist = (code) => fetch(`${base}/api/web/history?id=${id}`, { headers: code === undefined ? {} : { 'x-pitchside-passcode': code } });
+  try {
+    const none = await hist();
+    assert.equal(none.status, 401);
+    assert.equal((await none.json()).passcode, true);
+    assert.equal((await hist('s3cret')).status, 200);
+    const chat = await fetch(`${base}/api/web/chat`, { method: 'POST', headers: { 'x-pitchside-passcode': 's3cret' }, body: JSON.stringify({ id, text: 'hi' }) });
+    assert.equal(chat.status, 200);
+    assert.equal((await fetch(`${base}/`)).status, 200); // the page itself loads; only the API is gated
+
+    for (let i = 0; i < 10; i++) assert.equal((await hist('wrong')).status, 401);
+    assert.equal((await hist('s3cret')).status, 429); // locked out, even with the right code
+    clock += 15 * 60_000;
+    assert.equal((await hist('s3cret')).status, 200);
+  } finally {
+    server.close();
+  }
+});

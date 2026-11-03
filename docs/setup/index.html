@@ -155,7 +155,7 @@ const DEFAULT_REPO = 'dh8116/pitchside';
 const PRESETS = {
   'dh8116/pitchside': {
     oneOf: [{ keys: ['GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_BASE_URL'], label: 'a model key (Gemini and Groq are free)' }],
-    generate: ['WEBHOOK_SECRET', 'WHATSAPP_VERIFY_TOKEN'],
+    generate: ['WEBHOOK_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'WEB_CHAT_PASSWORD'],
     groupNotes: {
       'Channels': 'Everything below is optional: a channel switches on when its values are filled. The browser test chat works with only a model key.',
       'Auto-posting': 'Optional. Lets Pitchside publish the posts it drafts. Leave POST_OWNERS empty and nobody can post.',
@@ -173,6 +173,7 @@ const PRESETS = {
       POST_OWNERS: 'Your own number or email (and "web" for the local test chat), comma-separated. Only these people can make Pitchside post.',
       X_API_KEY: 'developer.x.com → your app (set to Read and Write) → Keys and tokens → API Key.',
       LINKEDIN_AUTHOR: 'urn:li:person:<id> for your profile, or urn:li:organization:<id> for a company page.',
+      WEB_CHAT_PASSWORD: 'Passcode for the browser chat at your server\'s address. Hit Generate, or pick something long. Leave empty only when running on your own laptop.',
       BLUESKY_APP_PASSWORD: 'Not your real password: bsky.app → Settings → Privacy and security → App passwords.',
     },
   },

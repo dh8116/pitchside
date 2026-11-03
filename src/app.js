@@ -3,9 +3,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseReply } from './format.js';
 import { CHECKIN_REQUEST } from './prompts.js';
+import { safeEqual } from './channels/util.js';
 
 const MAX_BODY = 1_000_000;
 const UUID_RE = /^[0-9a-f-]{36}$/;
+const MAX_FAILED_PASSCODES = 10;
+const LOCKOUT_MS = 15 * 60_000;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
 async function readBody(req) {
@@ -32,7 +35,23 @@ function friendlyError(err) {
   return 'Something went wrong on my side. Try again in a moment.';
 }
 
-export function createApp({ coach, users, channels, publicDir, webChat = true, log = console }) {
+export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', log = console, now = () => Date.now() }) {
+  // Wrong-passcode attempts per client address, so the passcode can't be guessed by brute force.
+  const failures = new Map();
+
+  function checkPasscode(req) {
+    if (!webChatPassword) return null;
+    const ip = req.socket.remoteAddress ?? 'unknown';
+    const f = failures.get(ip);
+    if (f && f.count >= MAX_FAILED_PASSCODES && now() - f.first < LOCKOUT_MS) return { status: 429, error: 'Too many wrong passcodes. Try again in 15 minutes.' };
+    if (safeEqual(req.headers['x-pitchside-passcode'], webChatPassword)) { failures.delete(ip); return null; }
+    if (req.headers['x-pitchside-passcode'] !== undefined) {
+      const fresh = !f || now() - f.first >= LOCKOUT_MS;
+      failures.set(ip, fresh ? { count: 1, first: now() } : { ...f, count: f.count + 1 });
+    }
+    return { status: 401, error: 'passcode required', passcode: true };
+  }
+
   async function serveStatic(res, pathname) {
     const full = path.resolve(publicDir, pathname === '/' ? 'index.html' : pathname.slice(1));
     if (!full.startsWith(path.resolve(publicDir) + path.sep)) return send(res, 404, { error: 'not found' });
@@ -72,6 +91,8 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, l
 
       if (pathname.startsWith('/api/web/')) {
         if (!webChat) return send(res, 404, { error: 'web chat is disabled' });
+        const denied = checkPasscode(req);
+        if (denied) return send(res, denied.status, { error: denied.error, passcode: denied.status === 401 });
         if (req.method === 'POST' && pathname === '/api/web/chat') {
           let body;
           try { body = JSON.parse((await readBody(req)).toString('utf8')); } catch { return send(res, 400, { error: 'invalid JSON' }); }

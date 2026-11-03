@@ -49,7 +49,7 @@ Free tiers have rate limits, which is fine for one person or a small group.
 | SMS and/or WhatsApp | [Twilio](https://www.twilio.com/docs/messaging) | `{PUBLIC_URL}/webhooks/twilio` |
 | iMessage | [BlueBubbles](https://bluebubbles.app) on a Mac | `{PUBLIC_URL}/webhooks/imessage?secret={WEBHOOK_SECRET}` |
 | Email | [Postmark](https://postmarkapp.com/developer/webhooks/inbound-webhook) inbound and outbound | `{PUBLIC_URL}/webhooks/email?secret={WEBHOOK_SECRET}` |
-| Browser (testing) | built in | `http://localhost:3000` |
+| Browser | built in | your server's address (`http://localhost:3000` locally). Set `WEB_CHAT_PASSWORD` on a public server |
 
 A channel turns on when its environment variables are set. Use any combination.
 
@@ -75,9 +75,9 @@ Requires Node 20.12+ and one model key (see the table above).
 Pitchside has no shared public number. Each person or team runs their own copy, which keeps your conversations on your server. The setup is one-time and needs no coding. After that you just text it.
 
 1. **Get a free model key** from Google AI Studio or Groq (see above).
-2. **Deploy:** fork this repo on GitHub, then create a new service from your fork on [Railway](https://railway.com) or [Render](https://render.com). Add `GEMINI_API_KEY` (or `GROQ_API_KEY`), `WEB_CHAT=0`, and a long random `WEBHOOK_SECRET` as environment variables, and attach a disk/volume mounted at `/data` with `DATA_DIR=/data` so memory survives restarts. Copy the public URL it gives you into `PUBLIC_URL`.
+2. **Deploy:** fork this repo on GitHub, then create a new service from your fork on [Railway](https://railway.com) or [Render](https://render.com). Add `GEMINI_API_KEY` (or `GROQ_API_KEY`), a `WEB_CHAT_PASSWORD`, and a long random `WEBHOOK_SECRET` as environment variables, and attach a disk/volume mounted at `/data` with `DATA_DIR=/data` so memory survives restarts. Copy the public URL it gives you into `PUBLIC_URL`.
 3. **Get a WhatsApp number for free:** in [Meta for Developers](https://developers.facebook.com), create an app, add WhatsApp, and use the free **test number** it gives you. Add your own phone as an allowed recipient (the test number can message up to 5 numbers). Copy the token and phone number ID into `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID`, pick a `WHATSAPP_VERIFY_TOKEN`, and set the webhook (details below).
-4. **Save that number in your phone and say hi.**
+4. **Save that number in your phone and say hi.** Or skip step 3 and chat in your browser: open your server's URL and enter your `WEB_CHAT_PASSWORD`.
 
 For SMS, iMessage or email instead, swap step 3 for the matching section below. To open it to more people than the test number allows, register your own business number in Meta's WhatsApp Manager.
 
@@ -168,7 +168,7 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 
 ## Deploying
 
-Any host that runs Node and keeps a disk works (Railway, Fly.io, Render, a VPS). A `Dockerfile` is included and stores data in `/data`, so mount a volume there. On a public server, set `WEB_CHAT=0` so strangers can't use the browser chat on your API key.
+Any host that runs Node and keeps a disk works (Railway, Fly.io, Render, a VPS). A `Dockerfile` is included and stores data in `/data`, so mount a volume there. On a public server, set `WEB_CHAT_PASSWORD` so only people with the passcode can use the browser chat (and your API key). After 10 wrong guesses from one address, the chat locks for 15 minutes. Set `WEB_CHAT=0` to turn the browser chat off entirely.
 
 ## Development
 

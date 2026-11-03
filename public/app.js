@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pitchside.webId';
+const PASSCODE_KEY = 'pitchside.passcode';
 const PLATFORM = { x: 'X', linkedin: 'LinkedIn', threads: 'Threads', bluesky: 'Bluesky' };
 const LIMIT = { x: 280, bluesky: 300, threads: 500, linkedin: 3000 };
 const CHIPS = [
@@ -19,6 +20,21 @@ function loadId() {
   } catch { return crypto.randomUUID(); }
 }
 let webId = loadId();
+
+// Only needed when the server sets WEB_CHAT_PASSWORD. Remembered on this device.
+let passcode = '';
+try { passcode = localStorage.getItem(PASSCODE_KEY) ?? ''; } catch {}
+const authHeaders = () => (passcode ? { 'x-pitchside-passcode': passcode } : {});
+
+function lock(message = '') {
+  $('empty').hidden = true;
+  $('log').replaceChildren();
+  $('gate').hidden = false;
+  $('gate-error').textContent = message;
+  $('input').disabled = true;
+  $('send').disabled = true;
+  $('passcode').focus();
+}
 
 const el = (tag, props = {}, ...children) => {
   const node = Object.assign(document.createElement(tag), props);
@@ -77,8 +93,9 @@ function setBusy(on) {
 }
 
 async function api(path, body) {
-  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
+  if (data.passcode) { lock(passcode ? 'That passcode didn\'t work.' : ''); throw new Error('Enter the passcode to keep chatting.'); }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
@@ -130,8 +147,13 @@ function reset() {
 
 async function restore() {
   reset();
-  const res = await fetch(`/api/web/history?id=${webId}`);
+  const res = await fetch(`/api/web/history?id=${webId}`, { headers: authHeaders() });
+  if (res.status === 401) return lock(passcode ? 'That passcode didn\'t work.' : '');
+  if (res.status === 429) return lock((await res.json()).error);
   if (!res.ok) return;
+  $('gate').hidden = true;
+  $('input').disabled = false;
+  $('send').disabled = false;
   for (const m of (await res.json()).messages) {
     if (m.role === 'user') addMessage('out', { type: 'text', text: m.text });
     else m.bubbles.forEach((b) => addMessage('in', b));
@@ -148,6 +170,14 @@ $('new').onclick = () => {
   try { localStorage.setItem(STORAGE_KEY, webId); } catch {}
   reset();
   $('input').focus();
+};
+
+$('gate').onsubmit = (e) => {
+  e.preventDefault();
+  passcode = $('passcode').value.trim();
+  try { localStorage.setItem(PASSCODE_KEY, passcode); } catch {}
+  $('passcode').value = '';
+  restore().catch(() => {});
 };
 
 restore().catch(() => {});
