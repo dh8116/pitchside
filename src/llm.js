@@ -2,7 +2,7 @@
 // returning the reply text, so any provider can sit behind it:
 //   - Claude (Anthropic SDK) — best quality, supports web search
 //   - Gemini / Groq — free tiers via their OpenAI-compatible chat endpoints
-//   - Meta Llama API (optional) — Meta's OpenAI-compatible endpoint for Llama models
+//   - Meta Model API (optional) — Muse Spark / Muse Wonder through Meta's OpenAI-compatible chat endpoint
 // Several providers can be chained: on a rate limit or outage the next one answers.
 
 const MAX_PAUSE_CONTINUATIONS = 3;
@@ -48,8 +48,10 @@ export const FREE_PROVIDERS = {
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b' },
 };
 
-// Meta's Llama API, through its OpenAI-compatible endpoint. Optional; set LLAMA_API_KEY.
-export const META_PROVIDER = { baseUrl: 'https://api.llama.com/compat/v1', model: 'Llama-4-Maverick-17B-128E-Instruct-FP8' };
+// Meta Model API (https://dev.meta.ai/docs), OpenAI-compatible chat. Optional; set MODEL_API_KEY (or META_API_KEY).
+// Text models: muse-spark-1.3, muse-spark-1.2, muse-wonder-1.0. The "-contributor" variants are cheaper but Meta may
+// use prompts to improve its products, so they are never the default. Muse Image and SAM 3.1 aren't chat models.
+export const META_PROVIDER = { baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3' };
 
 /** Any OpenAI-compatible /chat/completions endpoint (Gemini, Groq, OpenRouter, a local Ollama…). */
 export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, maxTokens = 4000, fetchImpl = fetch }) {
@@ -105,7 +107,7 @@ export function chainLLM(providers, { log = console } = {}) {
 
 /**
  * Builds the provider chain from environment variables. Order: Claude (if a
- * key is set), then Gemini, Groq and Meta (Llama API), then a custom endpoint.
+ * key is set), then Gemini, Groq and Meta (Model API), then a custom endpoint.
  * LLM_PROVIDERS=gemini,groq,meta overrides it.
  */
 export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log } = {}) {
@@ -119,8 +121,8 @@ export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log } = {}) 
     groq: env.GROQ_API_KEY
       ? () => openaiCompatibleLLM({ name: 'groq', ...FREE_PROVIDERS.groq, model: env.GROQ_MODEL || FREE_PROVIDERS.groq.model, apiKey: env.GROQ_API_KEY, fetchImpl })
       : null,
-    meta: env.LLAMA_API_KEY
-      ? () => openaiCompatibleLLM({ name: 'meta', ...META_PROVIDER, baseUrl: env.LLAMA_BASE_URL || META_PROVIDER.baseUrl, model: env.LLAMA_MODEL || META_PROVIDER.model, apiKey: env.LLAMA_API_KEY, fetchImpl })
+    meta: env.MODEL_API_KEY || env.META_API_KEY
+      ? () => openaiCompatibleLLM({ name: 'meta', ...META_PROVIDER, baseUrl: env.META_API_BASE || META_PROVIDER.baseUrl, model: env.META_MODEL || META_PROVIDER.model, apiKey: env.MODEL_API_KEY || env.META_API_KEY, fetchImpl })
       : null,
     custom: env.LLM_BASE_URL && env.LLM_MODEL
       ? () => openaiCompatibleLLM({ name: 'custom', baseUrl: env.LLM_BASE_URL, model: env.LLM_MODEL, apiKey: env.LLM_API_KEY ?? '', fetchImpl })

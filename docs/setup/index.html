@@ -154,7 +154,7 @@ const DEFAULT_REPO = 'dh8116/pitchside';
 // Extra knowledge for Pitchside's variables. Other repos get the generic parser only.
 const PRESETS = {
   'dh8116/pitchside': {
-    oneOf: [{ keys: ['GEMINI_API_KEY', 'GROQ_API_KEY', 'LLAMA_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_BASE_URL'], label: 'a model key (Gemini and Groq are free)' }],
+    oneOf: [{ keys: ['GEMINI_API_KEY', 'GROQ_API_KEY', 'MODEL_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_BASE_URL'], label: 'a model key (Gemini and Groq are free)' }],
     generate: ['WEBHOOK_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'WEB_CHAT_PASSWORD'],
     groupNotes: {
       'Channels': 'Everything below is optional: a channel switches on when its values are filled. The browser test chat works with only a model key.',
@@ -163,7 +163,7 @@ const PRESETS = {
     help: {
       GEMINI_API_KEY: 'Free. Create one at https://aistudio.google.com/apikey',
       GROQ_API_KEY: 'Free and very fast. Create one at https://console.groq.com/keys',
-      LLAMA_API_KEY: 'Optional. Meta\'s Llama API, used as another fallback. Create one at https://llama.developer.meta.com',
+      MODEL_API_KEY: 'Optional. Meta Model API (Muse Spark / Muse Wonder), used as another fallback. Docs and keys: https://dev.meta.ai/docs',
       ANTHROPIC_API_KEY: 'Paid. Best coaching quality and turns on web search for competitor checks. https://console.anthropic.com',
       PUBLIC_URL: 'The https address your server is reachable at (your Railway/Render URL, or a cloudflared/ngrok tunnel). Must match exactly what Twilio calls.',
       WEBHOOK_SECRET: 'Any long random string. Hit Generate. It goes on the end of the iMessage and email webhook URLs as ?secret=…',
