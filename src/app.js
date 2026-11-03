@@ -86,13 +86,32 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, l
             return send(res, 502, { error: friendlyError(err) });
           }
         }
+        if (req.method === 'POST' && pathname === '/api/web/post') {
+          let body;
+          try { body = JSON.parse((await readBody(req)).toString('utf8')); } catch { return send(res, 400, { error: 'invalid JSON' }); }
+          const { id, postId } = body ?? {};
+          if (!UUID_RE.test(String(id))) return send(res, 400, { error: 'id must be a UUID' });
+          if (!Number.isInteger(postId)) return send(res, 400, { error: 'postId must be an integer' });
+          try {
+            return send(res, 200, { bubbles: await coach.publishDraft({ key: `web:${id}`, postId }) });
+          } catch (err) {
+            log.error(err);
+            return send(res, 502, { error: friendlyError(err) });
+          }
+        }
         if (req.method === 'GET' && pathname === '/api/web/history') {
           const id = url.searchParams.get('id');
           if (!UUID_RE.test(String(id))) return send(res, 400, { error: 'id must be a UUID' });
           const user = await users.get(`web:${id}`);
+          const pending = user?.pendingPosts ?? [];
+          // Drafts still waiting keep their "Post now" button after a reload.
+          const withPostIds = (b) => {
+            const draft = b.type === 'post' && pending.find((p) => p.platform === b.platform && p.text === b.text);
+            return draft ? { ...b, postId: draft.id } : b;
+          };
           const messages = (user?.messages ?? [])
             .filter((m) => m.content !== CHECKIN_REQUEST)
-            .map((m) => (m.role === 'user' ? { role: 'user', text: m.content } : { role: 'assistant', bubbles: parseReply(m.content).bubbles }));
+            .map((m) => (m.role === 'user' ? { role: 'user', text: m.content } : { role: 'assistant', bubbles: parseReply(m.content).bubbles.map(withPostIds) }));
           return send(res, 200, { messages });
         }
         return send(res, 404, { error: 'not found' });

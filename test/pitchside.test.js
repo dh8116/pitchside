@@ -14,6 +14,10 @@ import { whatsappChannel } from '../src/channels/whatsapp.js';
 import { twilioChannel, twilioSignature } from '../src/channels/twilio.js';
 import { imessageChannel } from '../src/channels/imessage.js';
 import { emailChannel } from '../src/channels/email.js';
+import { createPublisher, isOwner, parseOwners } from '../src/posting/index.js';
+import { oauth1Header, xPoster } from '../src/posting/x.js';
+import { escapeLittleText, linkedinPoster } from '../src/posting/linkedin.js';
+import { blueskyPoster, linkFacets } from '../src/posting/bluesky.js';
 
 const tmpStore = async () => createUserStore(await mkdtemp(path.join(os.tmpdir(), 'pitchside-')));
 
@@ -277,4 +281,135 @@ test('coach system prompt includes the playbook knowledge', async () => {
   await coach.handleInbound({ key: 'web:k', channel: 'web', address: 'k', text: 'hi', deliver: false });
   assert.match(system, /You are Pitchside/);
   assert.match(system, /Seed-test before a real send/);
+});
+
+test('echoed context lines never reach the founder or the next model turn', async () => {
+  const echo = '[Pitchside context · channel: web · their local time: Tue, 3 Nov 2026, 04:45 (UTC) · challenge: day 1 of 30 · remembered: product: Soulor]';
+  assert.deepEqual(parseReply(`${echo}\nI work directly with you.\n\nWhat's the struggle?`).bubbles.map((b) => b.text), ['I work directly with you.', "What's the struggle?"]);
+  const user = newUser('k', 'web', 'a');
+  user.messages = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: `${echo}\nhey` }];
+  assert.equal(buildMessages(user, 'next')[1].content, 'hey');
+});
+
+const fakePoster = (name, results = []) => {
+  const posted = [];
+  return { posted, name, async post(text) { posted.push(text); const r = results.shift(); if (r instanceof Error) throw r; return { url: `https://${name}/1` }; } };
+};
+
+async function postingCoach({ reply, autoPost = false, owners = ['+1555'] }) {
+  const users = await tmpStore();
+  const x = fakePoster('x.com');
+  const bsky = fakePoster('bsky.app');
+  const llm = { name: 't', calls: [], complete: async (args) => { llm.calls.push(args); return reply; } };
+  const publisher = createPublisher({ posters: { x, bluesky: bsky }, owners, autoPost, log: { error() {} } });
+  const coach = createCoach({ llm, users, publisher });
+  return { users, x, bsky, llm, coach };
+}
+
+test('posting: owner drafts wait for "post it", then publish', async () => {
+  const { coach, x, llm, users } = await postingCoach({ reply: 'Here:\n<post platform="x">Shipped day 1.</post>' });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+  const bubbles = await msg('draft my post');
+  assert.match(llm.calls[0].messages.at(-1).content, /app can publish to: x, bluesky/);
+  assert.equal(bubbles[1].postId, 1);
+  assert.match(bubbles.at(-1).text, /Reply "post it" and I'll publish it to X/);
+  assert.equal(x.posted.length, 0);
+
+  const [done] = await msg('Post it!');
+  assert.equal(done.text, 'Posted to X: https://x.com/1');
+  assert.deepEqual(x.posted, ['Shipped day 1.']);
+  assert.equal(llm.calls.length, 1);
+  assert.deepEqual((await users.get('sms:+1555')).pendingPosts, []);
+  assert.match((await msg('post it'))[0].text, /Nothing waiting/);
+});
+
+test('posting: non-owners never post and "post it" goes to the coach', async () => {
+  const { coach, x, llm } = await postingCoach({ reply: '<post platform="x">hi</post>' });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1999', channel: 'twilio', address: '+1999', text, deliver: false });
+  const bubbles = await msg('draft');
+  assert.equal(bubbles.length, 1);
+  assert.equal(bubbles[0].postId, undefined);
+  assert.doesNotMatch(llm.calls[0].messages.at(-1).content, /app can publish/);
+  await msg('post it');
+  assert.equal(llm.calls.length, 2);
+  assert.equal(x.posted.length, 0);
+});
+
+test('posting: two options need "post N"; AUTO_POST publishes single drafts at once', async () => {
+  const two = await postingCoach({ reply: '<post platform="x">A</post>\n<post platform="x">B</post>' });
+  const msg = (text) => two.coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+  assert.match((await msg('draft')).at(-1).text, /"post 1" to "post 2"/);
+  assert.match((await msg('post it'))[0].text, /2 options/);
+  await msg('post 2');
+  assert.deepEqual(two.x.posted, ['B']);
+
+  const auto = await postingCoach({ reply: '<post platform="bluesky">Day 2 of 30</post>', autoPost: true });
+  const bubbles = await auto.coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text: 'draft', deliver: false });
+  assert.equal(bubbles.at(-1).text, 'Posted to Bluesky: https://bsky.app/1');
+  assert.deepEqual(auto.bsky.posted, ['Day 2 of 30']);
+  const user = await auto.users.get('sms:+1555');
+  assert.match(user.messages.at(-1).content, /Posted to Bluesky/);
+});
+
+test('posting: failures keep the draft; owners match keys, addresses and "web"', async () => {
+  const { coach, x } = await postingCoach({ reply: '<post platform="x">hi</post>' });
+  x.post = async () => { throw new Error('POST api.x.com → 403: duplicate'); };
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+  await msg('draft');
+  assert.match((await msg('post it'))[0].text, /Couldn't post to X: .*403.*retry/);
+  assert.match((await msg('post it'))[0].text, /Couldn't post to X/); // still pending
+
+  assert.equal(isOwner(['jo@startup.io'], 'email:jo@startup.io'), true);
+  assert.equal(isOwner(['whatsapp:+1'], 'sms:+1'), false);
+  assert.equal(isOwner(['web'], 'web:abc'), true);
+  assert.deepEqual(parseOwners(' +1555, Jo@Startup.io ,'), ['+1555', 'jo@startup.io']);
+});
+
+test('web "Post now" publishes a held draft and history keeps its button', async () => {
+  const { coach, x, users } = await postingCoach({ reply: 'Try:\n<post platform="x">Day 3</post>', owners: ['web'] });
+  const app = createApp({ coach, users, channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
+  const server = http.createServer(app).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const id = '11111111-2222-3333-4444-555555555555';
+    const { bubbles } = await (await fetch(`${base}/api/web/chat`, { method: 'POST', body: JSON.stringify({ id, text: 'post idea' }) })).json();
+    const postId = bubbles.find((b) => b.type === 'post').postId;
+    const hist = await (await fetch(`${base}/api/web/history?id=${id}`)).json();
+    assert.equal(hist.messages[1].bubbles.find((b) => b.type === 'post').postId, postId);
+    assert.match(hist.messages[1].bubbles.at(-1).text, /post it/);
+
+    const res = await (await fetch(`${base}/api/web/post`, { method: 'POST', body: JSON.stringify({ id, postId }) })).json();
+    assert.equal(res.bubbles[0].text, 'Posted to X: https://x.com/1');
+    assert.deepEqual(x.posted, ['Day 3']);
+    assert.equal((await fetch(`${base}/api/web/post`, { method: 'POST', body: JSON.stringify({ id, postId: 'x' }) })).status, 400);
+  } finally {
+    server.close();
+  }
+});
+
+test('platform clients: X OAuth 1.0a signing, LinkedIn escaping, Bluesky facets', async () => {
+  const h = oauth1Header({ method: 'POST', url: 'https://api.x.com/2/tweets', consumerKey: 'ck', consumerSecret: 'cs', token: 't', tokenSecret: 'ts', nonce: 'n', timestamp: 1 });
+  const base = 'POST&https%3A%2F%2Fapi.x.com%2F2%2Ftweets&oauth_consumer_key%3Dck%26oauth_nonce%3Dn%26oauth_signature_method%3DHMAC-SHA1%26oauth_timestamp%3D1%26oauth_token%3Dt%26oauth_version%3D1.0';
+  const sig = encodeURIComponent(createHmac('sha1', 'cs&ts').update(base).digest('base64'));
+  assert.equal(h, `OAuth oauth_consumer_key="ck", oauth_nonce="n", oauth_signature="${sig}", oauth_signature_method="HMAC-SHA1", oauth_timestamp="1", oauth_token="t", oauth_version="1.0"`);
+
+  let sent;
+  const xp = xPoster({ apiKey: 'ck', apiSecret: 'cs', accessToken: 't', accessTokenSecret: 'ts', fetchImpl: async (u, init) => { sent = init; return Response.json({ data: { id: '42' } }); } });
+  assert.deepEqual(await xp.post('hi'), { url: 'https://x.com/i/web/status/42' });
+  assert.equal(JSON.parse(sent.body).text, 'hi');
+
+  assert.equal(escapeLittleText('Day 3 (of 30) #buildinpublic @jo'), 'Day 3 \\(of 30\\) \\#buildinpublic \\@jo');
+  const li = linkedinPoster({ accessToken: 'a', author: 'urn:li:person:x', fetchImpl: async (u, init) => { sent = init; return new Response(null, { status: 201, headers: { 'x-restli-id': 'urn:li:share:9' } }); } });
+  assert.deepEqual(await li.post('hello'), { url: 'https://www.linkedin.com/feed/update/urn:li:share:9/' });
+  assert.equal(sent.headers['linkedin-version'], '202510');
+
+  assert.deepEqual(linkFacets('café https://a.io/x.')[0].index, { byteStart: 6, byteEnd: 20 });
+  const calls = [];
+  const bs = blueskyPoster({ handle: 'jo.bsky.social', appPassword: 'p', fetchImpl: async (u, init) => {
+    calls.push([u, JSON.parse(init.body)]);
+    return Response.json(u.endsWith('createSession') ? { accessJwt: 'jwt', did: 'did:plc:1', handle: 'jo.bsky.social' } : { uri: 'at://did:plc:1/app.bsky.feed.post/3abc' });
+  } });
+  assert.deepEqual(await bs.post('hi'), { url: 'https://bsky.app/profile/jo.bsky.social/post/3abc' });
+  assert.equal(calls[1][1].record.text, 'hi');
+  await assert.rejects(bs.post('x'.repeat(301)), /300 characters/);
 });

@@ -22,6 +22,7 @@ export function newUser(key, channel, address) {
     notes: [],
     messages: [],        // { role, content, at }
     seenIds: [],         // inbound message ids already handled (webhook retries)
+    pendingPosts: [],    // drafts waiting for the owner's "post it" { id, platform, text, at }
     meta: {},            // channel extras, e.g. email thread headers
   };
 }

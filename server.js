@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createApp } from './src/app.js';
 import { createCoach } from './src/coach.js';
 import { llmFromEnv } from './src/llm.js';
+import { createPublisher, postersFromEnv, parseOwners } from './src/posting/index.js';
 import { createUserStore } from './src/users.js';
 import { whatsappChannel } from './src/channels/whatsapp.js';
 import { twilioChannel } from './src/channels/twilio.js';
@@ -58,11 +59,18 @@ if (env.POSTMARK_SERVER_TOKEN && env.EMAIL_FROM) {
   });
 }
 
+const posters = postersFromEnv(env);
+const postOwners = parseOwners(env.POST_OWNERS);
+const publisher = Object.keys(posters).length && postOwners.length
+  ? createPublisher({ posters, owners: postOwners, autoPost: env.AUTO_POST === '1' })
+  : null;
+
 const users = createUserStore(path.resolve(env.DATA_DIR ?? path.join(here, 'data')));
 const coach = createCoach({
   llm,
   users,
   channels,
+  publisher,
   webSearch: env.PITCHSIDE_WEB_SEARCH !== '0',
 });
 
@@ -79,6 +87,8 @@ http.createServer(handler).listen(port, () => {
   console.log(`Pitchside is running at http://localhost:${port}`);
   console.log(`Model: ${llm.name}`);
   console.log(`Channels: ${on.length ? on.join(', ') : 'none configured (web chat only)'}`);
+  if (publisher) console.log(`Auto-posting: ${Object.keys(posters).join(', ')} for ${postOwners.length} owner(s), ${env.AUTO_POST === '1' ? 'immediately' : 'after "post it"'}`);
+  else if (Object.keys(posters).length) console.log('Auto-posting: platform keys found but POST_OWNERS is empty, so nobody can post');
 });
 
 // Morning check-ins: every 10 minutes, message anyone whose local time is the
