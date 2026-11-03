@@ -20,7 +20,7 @@ Pitchside:  Two hours of silence means nothing yet. The bounce is the thing to f
 - **Learns your business by text.** One question at a time: product, buyer, stage, which accounts you post from, what you've tried, your goal for the next 30 days.
 - **30-day challenge.** Starts when you first message. Every day has one outcome, and it remembers what you committed to.
 - **Morning check-ins.** At 8am your time (configurable), it texts you today's single most important thing.
-- **Build-in-public posts.** Drafts "Day N of 30" posts for X, LinkedIn, Threads or Bluesky in your voice, often two options, and says which is stronger. Each comes with a **tap-to-post** link that opens the composer pre-filled.
+- **Build-in-public posts.** Drafts short "Day N of 30 with Pitchside" posts (one line per thought) for X, LinkedIn, Threads or Bluesky in your voice, often two options, and says which is stronger. Each comes with a **tap-to-post** link that opens the composer pre-filled.
 - **Auto-posting (optional).** Connect X, LinkedIn and/or Bluesky and Pitchside publishes its drafts for you: reply "post it" and it's live. Only the owners you list can post. See [Auto-posting](#auto-posting).
 - **Outreach coaching.** Who to target, cold email and DM copy, send timing, deliverability (seed tests, sender identity, bounces), follow-ups, and phone routes when email is blocked.
 - **Positioning and launch reviews.** Landing copy, pricing pages, Product Hunt, Hacker News and Reddit plans, and where each will get pushback.

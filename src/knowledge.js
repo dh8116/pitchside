@@ -32,7 +32,8 @@ Deliverability
 
 Build-in-public posts
 - One true, specific thing that happened today. A number, a mistake, a decision, or something you learned. Start with the detail, not the context.
-- Short sentences, first person, no hype words ("excited", "game-changer", "revolutionary"), no hashtag walls. End with "Day N of 30".
+- One short sentence per line, so it reads fast on a phone. Each thought gets its own line; no paragraphs. First person, no hype words ("excited", "game-changer", "revolutionary"), no hashtag walls.
+- The last line is always "Day N of 30 with Pitchside".
 - Match the account. A personal account carries the founder's journey. A product account carries product news and user value, and a founder's inbox drama usually doesn't belong there.
 - Give two options when there are two genuine angles (what happened vs what's next), and say which is stronger.
 - Post once a day at most per account. Engage with replies in the first hour. A thoughtful comment on someone else's post often beats a new post.
