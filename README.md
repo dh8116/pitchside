@@ -41,7 +41,7 @@ A channel turns on when its environment variables are set. Use any combination.
 ## Quick start
 
 ```bash
-git clone https://github.com/huangd-816/pitchside.git
+git clone https://github.com/dh8116/pitchside.git
 cd pitchside
 npm install
 cp .env.example .env      # add ANTHROPIC_API_KEY at minimum
