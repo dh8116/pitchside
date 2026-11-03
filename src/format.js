@@ -2,12 +2,18 @@
 
 const POST_RE = /<post(?:\s+platform="([a-z]+)")?\s*>([\s\S]*?)<\/post>/gi;
 const REMEMBER_RE = /<remember>([\s\S]*?)<\/remember>/gi;
+// Weaker models sometimes echo the app's per-turn context line back; never show it.
+const CONTEXT_ECHO_RE = /^[ \t]*\[Pitchside context\b[^\n]*(?:\n|$)/gim;
 
 const SHARE_URLS = {
   x: (t) => `https://x.com/intent/post?text=${encodeURIComponent(t)}`,
   linkedin: (t) => `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(t)}`,
   threads: (t) => `https://www.threads.net/intent/post?text=${encodeURIComponent(t)}`,
+  bluesky: (t) => `https://bsky.app/intent/compose?text=${encodeURIComponent(t)}`,
 };
+
+/** Removes any echoed "[Pitchside context …]" line from model output. */
+export const stripContextEcho = (text) => text.replace(CONTEXT_ECHO_RE, '');
 
 export function shareLink(platform, text) {
   return (SHARE_URLS[platform] ?? SHARE_URLS.x)(text);
@@ -18,7 +24,7 @@ export function shareLink(platform, text) {
  */
 export function parseReply(raw) {
   const memories = [...raw.matchAll(REMEMBER_RE)].map((m) => m[1].trim()).filter(Boolean);
-  const text = raw.replace(REMEMBER_RE, '');
+  const text = stripContextEcho(raw.replace(REMEMBER_RE, ''));
 
   const bubbles = [];
   const pushText = (chunk) => {
@@ -40,7 +46,7 @@ export function parseReply(raw) {
   return { bubbles, memories };
 }
 
-const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', threads: 'Threads' };
+const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', threads: 'Threads', bluesky: 'Bluesky' };
 
 /** Plain-text rendering of one bubble, for SMS/WhatsApp/iMessage. */
 export function bubbleToText(b) {
