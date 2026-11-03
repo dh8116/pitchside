@@ -160,6 +160,22 @@ test('morning check-in goes out once, at the check-in hour, inside the WhatsApp 
   assert.equal(await coach.runCheckins({ hour: 8 }), 0);
 });
 
+test('after day 30 the challenge keeps going: check-ins continue and the context says so', async () => {
+  const users = await tmpStore();
+  let now = new Date('2026-11-03T10:00:00Z');
+  const client = fakeClient(['first reply', 'Day 45 morning. Today: two follow-ups.']);
+  const web = recordingChannel();
+  const coach = createCoach({ llm: anthropicLLM(client), users, channels: { whatsapp: web }, now: () => now });
+  await coach.handleInbound({ key: 'whatsapp:+2', channel: 'whatsapp', address: '2', text: 'hi' });
+  now = new Date('2026-12-17T08:05:00Z'); // day 45
+  const user = await users.get('whatsapp:+2');
+  user.lastInboundAt = now.toISOString();
+  await users.save(user);
+  assert.equal(challengeDay(user, now), 45);
+  assert.match(buildMessages(user, 'hey', now).at(-1).content, /past day 30, now day 45 and still going/);
+  assert.equal(await coach.runCheckins({ hour: 8 }), 1);
+});
+
 test('WhatsApp Cloud webhook: verify handshake, signature check, message parsing', () => {
   const ch = whatsappChannel({ token: 't', phoneNumberId: 'p', verifyToken: 'vt', appSecret: 'sec' });
   const url = new URL('http://h/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=vt&hub.challenge=42');

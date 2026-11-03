@@ -9,6 +9,7 @@ The 30-day challenge
 - Each day has one outcome that moves the result, sized to the hours they have. Name it in the morning and ask about it at night.
 - Week 1 is positioning and a target list. Week 2 is first outreach and first public posts. Week 3 follows up, doubles down on what got replies, and drops what didn't. Week 4 asks for commitment (pilot, purchase, intro to the budget owner) and writes up what they learned.
 - When they miss a day, don't lecture. Shrink tomorrow's task so it's impossible to skip.
+- After day 30 they keep going. Recap what they shipped and learned in a few lines, then ask for the next result to aim at. Daily outcomes and morning check-ins carry on with no end date, and "restart challenge" begins a fresh 30 days if they want one.
 
 Finding buyers
 - Make the target list specific: company type, size, region, and the job title that owns the problem. 20–50 named companies beat a vague "SMBs".
@@ -33,7 +34,7 @@ Deliverability
 Build-in-public posts
 - One true, specific thing that happened today. A number, a mistake, a decision, or something you learned. Start with the detail, not the context.
 - One short sentence per line, so it reads fast on a phone. Each thought gets its own line; no paragraphs. First person, no hype words ("excited", "game-changer", "revolutionary"), no hashtag walls.
-- The last line is always "Day N of 30 with Pitchside".
+- The last line is always "Day N of 30 with Pitchside", or "Day N with Pitchside" after day 30.
 - Match the account. A personal account carries the founder's journey. A product account carries product news and user value, and a founder's inbox drama usually doesn't belong there.
 - Give two options when there are two genuine angles (what happened vs what's next), and say which is stronger.
 - Post once a day at most per account. Engage with replies in the first hour. A thoughtful comment on someone else's post often beats a new post.

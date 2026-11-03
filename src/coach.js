@@ -39,7 +39,7 @@ export function contextLine(user, now = new Date(), { postingTo = [] } = {}) {
   const parts = [
     `channel: ${user.channel}`,
     `their local time: ${t.label} (${t.timezone})`,
-    day ? (day <= 30 ? `challenge: day ${day} of 30` : `challenge: finished (day ${day})`) : 'challenge: not started',
+    day ? (day <= 30 ? `challenge: day ${day} of 30` : `challenge: past day 30, now day ${day} and still going`) : 'challenge: not started',
     user.notes.length ? `remembered: ${user.notes.join(' | ')}` : 'remembered: nothing yet',
   ];
   if (postingTo.length) parts.push(`app can publish to: ${postingTo.join(', ')}`);
@@ -167,7 +167,6 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
       const local = localParts(user.timezone, t);
       if (local.hour !== hour || user.lastCheckinDate === local.date) return false;
       const day = challengeDay(user, t);
-      if (day > 31) return false;
       // WhatsApp only allows free-form business messages within 24h of the
       // person's last message; outside it you'd need an approved template.
       if (user.channel === 'whatsapp' || user.address?.startsWith?.('whatsapp:')) {
