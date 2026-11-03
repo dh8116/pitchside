@@ -65,7 +65,7 @@ function addMessage(side, bubble) {
 }
 
 function showTyping() {
-  const node = el('div', { className: 'typing', ariaLabel: 'Pitchside is typing' }, el('i'), el('i'), el('i'));
+  const node = el('div', { className: 'msg in typing', ariaLabel: 'Pitchside is typing' }, el('i'), el('i'), el('i'));
   $('log').append(node);
   scrollDown();
   return node;
