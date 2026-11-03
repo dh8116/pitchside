@@ -3,466 +3,142 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Values typed here never leave the page: the only network request allowed is fetching a public .env.example. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://raw.githubusercontent.com; form-action 'none'; base-uri 'none'">
-  <meta name="referrer" content="no-referrer">
-  <title>.env Builder</title>
-  <meta name="description" content="Fill in any repo's .env.example in your browser, generate secrets, and download a ready .env. Nothing is uploaded.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Cdefs%3E%3ClinearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%220%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22#4cd964%22/%3E%3Cstop offset=%221%22 stop-color=%22#1fa84a%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%2264%22 height=%2264%22 rx=%2215%22 fill=%22url(#g)%22/%3E%3Cpath d=%22M32 13c-11.6 0-21 7.6-21 17 0 5.4 3.1 10.2 8 13.3-.4 2.9-1.8 5.6-4 7.7 4.4-.2 8.3-1.9 11.2-4.4 1.9.4 3.8.6 5.8.6 11.6 0 21-7.6 21-17.2S43.6 13 32 13Z%22 fill=%22#fff%22/%3E%3Cg fill=%22#1fa84a%22%3E%3Ccircle cx=%2223%22 cy=%2230%22 r=%223.2%22/%3E%3Ccircle cx=%2232%22 cy=%2230%22 r=%223.2%22/%3E%3Ccircle cx=%2241%22 cy=%2230%22 r=%223.2%22/%3E%3C/g%3E%3C/svg%3E">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <title>Pitchside</title>
+  <meta name="description" content="An open-source go-to-market coach you text like a friend. Daily coaching on WhatsApp, iMessage, SMS and email, on free AI models.">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
   <style>
     :root {
-      --page: #ffffff; --bg: #ffffff; --surface: #f7f7f7; --raised: #f4f4f4;
-      --text: #0d0d0d; --muted: #6b6b6b; --border: #e5e5e5;
-      --accent: #10a37f; --accent-strong: #0b7d61; --accent-text: #ffffff; --warn: #a15c00; --error: #c4302b;
-      --display: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
-      --body: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
-      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      --bg: #ffffff; --soft: #f5f5f7; --text: #111111; --muted: #6e6e73; --border: #e3e3e8;
+      --received: #e9e9eb; --sent: #30c85e; --green-dark: #1f9a45; --green-soft: #e6f7eb;
       color-scheme: light;
     }
     * { box-sizing: border-box; }
-    html { scroll-padding-top: 90px; }
-    body {
-      margin: 0; color: var(--text); font: 15px/1.55 var(--body);
-      background: var(--page);
-      min-height: 100vh;
-    }
-    a { color: var(--accent); }
-    button, input, textarea { font: inherit; color: inherit; }
-    button { cursor: pointer; }
-    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Helvetica, Arial, sans-serif; }
+    a { color: var(--green-dark); }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
 
-    header.hero { padding: 48px 0 28px; }
-    .eyebrow { display: inline-flex; gap: 8px; align-items: center; color: var(--accent); font-weight: 700; font-size: 12.5px; letter-spacing: .08em; text-transform: uppercase; }
-    .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-    h1 { font: 600 clamp(28px, 5vw, 40px)/1.15 var(--display); letter-spacing: -.02em; margin: 14px 0 12px; }
-    h1 em { font-style: normal; color: var(--accent); }
-    .lede { color: var(--muted); max-width: 640px; margin: 0; font-size: 16.5px; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; }
+    nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 18px; color: var(--text); text-decoration: none; }
+    nav .links { display: flex; gap: 22px; font-size: 15px; }
+    nav .links a { color: var(--muted); text-decoration: none; }
+    nav .links a:hover { color: var(--text); }
 
-    .loader { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 26px; background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 10px; }
-    .loader input { flex: 1 1 260px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-family: var(--mono); font-size: 14px; }
-    .loader input:focus { outline: none; border-color: var(--accent); }
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 9px 16px; font-weight: 700; font-size: 14px; white-space: nowrap; text-decoration: none; color: var(--text); }
-    .btn:hover { border-color: var(--accent); }
-    .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-    .btn.primary:hover { background: var(--accent-strong); }
-    .btn.small { padding: 5px 11px; font-size: 12.5px; }
-    .msg { margin: 10px 2px 0; font-size: 13.5px; color: var(--muted); min-height: 1.4em; }
-    .msg.error { color: var(--error); }
+    .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; padding: 56px 0 72px; }
+    @media (max-width: 860px) { .hero { grid-template-columns: 1fr; padding-top: 24px; } }
+    h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.05; letter-spacing: -.03em; margin: 0 0 18px; }
+    h1 span { color: var(--green-dark); }
+    .lede { font-size: 20px; color: var(--muted); margin: 0 0 30px; max-width: 520px; }
+    .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn { display: inline-flex; align-items: center; padding: 12px 22px; border-radius: 999px; font-weight: 600; font-size: 16px; text-decoration: none; border: 1px solid var(--border); color: var(--text); }
+    .btn:hover { background: var(--soft); }
+    .btn.primary { background: var(--sent); border-color: var(--sent); color: #fff; }
+    .btn.primary:hover { background: var(--green-dark); }
+    .small { margin-top: 14px; font-size: 14px; color: var(--muted); }
 
-    main.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 24px; align-items: start; padding-bottom: 60px; }
-    @media (max-width: 920px) { main.grid { grid-template-columns: minmax(0, 1fr); } }
+    /* An iMessage-style thread. */
+    .phone { background: var(--bg); border: 1px solid var(--border); border-radius: 32px; padding: 18px 16px 22px; box-shadow: 0 24px 60px -30px rgb(0 0 0 / .25); max-width: 420px; justify-self: center; width: 100%; }
+    .phone .who { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+    .thread { display: flex; flex-direction: column; gap: 3px; font-size: 15px; line-height: 1.35; }
+    .b { max-width: 80%; padding: 7px 12px; border-radius: 18px; width: fit-content; }
+    .b.in { background: var(--received); }
+    .b.out { background: var(--sent); color: #fff; align-self: flex-end; }
+    .b.out + .b.in, .b.in + .b.out { margin-top: 10px; }
+    .preview { background: var(--received); border-radius: 18px; overflow: hidden; max-width: 85%; }
+    .preview p { margin: 0; padding: 8px 12px; }
+    .preview small { display: block; padding: 0 12px 8px; color: var(--muted); }
+    .preview div { border-top: 1px solid #dcdce0; text-align: center; padding: 8px; color: var(--green-dark); font-weight: 600; font-size: 14px; }
 
-    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
-    .toolbar .search { flex: 1 1 200px; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; }
-    .toolbar .search:focus { outline: none; border-color: var(--accent); }
-    .toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13.5px; }
+    section { padding: 64px 0; border-top: 1px solid var(--border); }
+    h2 { font-size: 32px; letter-spacing: -.02em; margin: 0 0 10px; }
+    .sub { color: var(--muted); margin: 0 0 32px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+    .card { background: var(--soft); border-radius: 20px; padding: 24px; }
+    .card h3 { margin: 0 0 6px; font-size: 18px; }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
 
-    .notice { border: 1px solid #f1d9a6; background: #fff8e8; color: #7a4a00; padding: 10px 14px; border-radius: 12px; font-size: 14px; margin-bottom: 14px; }
-    .notice[hidden] { display: none; }
+    ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; counter-reset: s; }
+    ol.steps li { counter-increment: s; display: grid; grid-template-columns: 40px 1fr; gap: 14px; align-items: start; padding: 18px 20px; border: 1px solid var(--border); border-radius: 18px; }
+    ol.steps li::before { content: counter(s); width: 32px; height: 32px; border-radius: 50%; background: var(--green-soft); color: var(--green-dark); font-weight: 700; display: grid; place-items: center; }
+    ol.steps b { display: block; margin-bottom: 2px; }
+    ol.steps span { color: var(--muted); font-size: 15px; }
+    code { background: var(--soft); padding: 1px 6px; border-radius: 6px; font-size: 14px; }
 
-    details.group > summary h2 { font: 600 15px/1.3 var(--display); margin: 0; flex: 1; letter-spacing: -.005em; }
-    details.group > summary .tally { color: var(--muted); font-size: 12.5px; }
-    details.group > summary::after { content: "▾"; color: var(--muted); transition: transform .15s; }
-    details.group:not([open]) > summary::after { transform: rotate(-90deg); }
-    details.group { background: var(--bg); border: 1px solid var(--border); border-radius: 18px; margin-bottom: 14px; overflow: hidden; }
-    details.group > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px 18px; }
-    details.group > summary::-webkit-details-marker { display: none; }
-    .group-note { color: var(--muted); font-size: 13.5px; padding: 0 18px 6px; margin: -4px 0 0; }
-
-    .field { padding: 12px 18px 14px; border-top: 1px solid var(--border); }
-    .field[hidden] { display: none; }
-    .field .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .field label { font: 500 13.5px var(--mono); color: var(--text); }
-    .tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-    .tag.req { color: var(--accent-strong); border-color: #b7e4d6; background: #e8f6f1; }
-    .field .help { color: var(--muted); font-size: 13.5px; margin: 4px 0 8px; }
-    .row { display: flex; gap: 6px; }
-    .row input { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; font: 14px var(--mono); }
-    .row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px #e8f6f1; }
-    .row input::placeholder { color: #a3a3a3; }
-    .field.filled .row input { border-color: #9fd9c6; }
-
-    aside.out { position: sticky; top: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 18px; overflow: hidden; }
-    @media (max-width: 920px) { aside.out { position: static; } }
-    .out-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    .out-head strong { font: 600 14px var(--display); flex: 1; }
-    .status { padding: 10px 16px; font-size: 13.5px; border-bottom: 1px solid var(--border); }
-    .status.ok { color: var(--accent-strong); }
-    .status.todo { color: var(--warn); }
-    pre { margin: 0; padding: 14px 16px; max-height: 62vh; overflow: auto; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-    pre { background: var(--surface); }
-    pre .c { color: #8a8a8a; }
-    pre .k { color: var(--accent-strong); }
-    .privacy { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
-    .privacy svg { flex: none; color: var(--accent); }
-    footer.foot { color: var(--muted); font-size: 13px; padding: 0 0 40px; }
+    .final { text-align: center; }
+    .final .cta { justify-content: center; }
+    footer { padding: 28px 0 40px; color: var(--muted); font-size: 14px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--border); }
   </style>
 </head>
 <body>
   <div class="wrap">
+    <nav>
+      <a class="brand" href="./"><img src="icon.svg" alt="" width="30" height="30">Pitchside</a>
+      <div class="links">
+        <a href="#how">How it works</a>
+        <a href="#setup">Set up</a>
+        <a href="https://github.com/dh8116/pitchside">GitHub</a>
+      </div>
+    </nav>
+
     <header class="hero">
-      <span class="eyebrow"><i></i>Runs entirely in your browser</span>
-      <h1>Build your <em>.env</em> without the guesswork</h1>
-      <p class="lede">Load any repo's <code>.env.example</code>, fill in a form with the help text alongside, generate secrets in one click, then copy or download the finished file. Your keys never leave this page.</p>
-
-      <form class="loader" id="loader">
-        <input id="source" aria-label="GitHub repo or raw URL" placeholder="owner/repo, owner/repo@branch, or a raw.githubusercontent.com URL" spellcheck="false" autocomplete="off">
-        <button class="btn primary" type="submit">Load</button>
-        <button class="btn" type="button" id="paste-toggle">Paste instead</button>
-      </form>
-      <textarea id="paste" hidden rows="8" aria-label="Paste a .env.example" placeholder="Paste the contents of a .env.example here" style="width:100%;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;font:13px var(--mono)"></textarea>
-      <p class="msg" id="msg"></p>
-    </header>
-
-    <main class="grid">
       <div>
-        <div class="toolbar">
-          <input class="search" id="filter" placeholder="Filter variables…" aria-label="Filter variables">
-          <button class="btn small" type="button" id="gen-all">Generate all secrets</button>
-          <label class="toggle"><input type="checkbox" id="show"> Show values</label>
-          <label class="toggle"><input type="checkbox" id="only-filled"> Only filled lines in output</label>
+        <h1>The go-to-market coach you <span>text like a friend.</span></h1>
+        <p class="lede">Tell Pitchside what happened today. It tells you what to do next, drafts your build-in-public post, and checks in every morning. On WhatsApp, iMessage, SMS or email.</p>
+        <div class="cta">
+          <a class="btn primary" href="setup/">Set up Pitchside</a>
+          <a class="btn" href="https://github.com/dh8116/pitchside">View on GitHub</a>
         </div>
-        <div class="notice" id="notice" hidden></div>
-        <div id="form"></div>
+        <p class="small">Open source (MIT). Runs on free Gemini or Groq models.</p>
       </div>
 
-      <aside class="out" aria-label="Generated .env">
-        <div class="out-head">
-          <strong>.env</strong>
-          <button class="btn small" type="button" id="copy">Copy</button>
-          <button class="btn small primary" type="button" id="download">Download</button>
+      <div class="phone" aria-label="Example conversation">
+        <div class="who"><img src="icon.svg" alt="" width="40" height="40">Pitchside</div>
+        <div class="thread">
+          <div class="b out">no replies yet, and one address bounced</div>
+          <div class="b in">Two hours of silence means nothing yet. The bounce is the thing to fix.</div>
+          <div class="b in">Call the main line between 8 and 9 and ask who owns customer training.</div>
+          <div class="preview"><p>Day 1 of 30. Sent 5 cold emails, 2 bounced. Tomorrow is fixing the list, not writing more copy.</p><small>X post · 95/280</small><div>Post to X</div></div>
+          <div class="b out">post it</div>
+          <div class="b in">Posted to X. Rest of today: replies, then the demo clip.</div>
         </div>
-        <div class="status" id="status"></div>
-        <pre id="output"></pre>
-        <div class="privacy">
-          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm-1 14-4-4 1.4-1.4L11 13.2l4.6-4.6L17 10l-6 6Z"/></svg>
-          <span>No uploads, no analytics, nothing saved. The page's security policy blocks every network request except fetching a public <code>.env.example</code> from GitHub. Values disappear when you close the tab.</span>
-        </div>
-      </aside>
-    </main>
+      </div>
+    </header>
 
-    <footer class="foot">Preset for <a href="https://github.com/dh8116/pitchside">Pitchside</a>. Share a link for another repo with <code>?repo=owner/name</code> (add <code>&amp;ref=branch</code> and <code>&amp;path=sub/.env.example</code> if needed).</footer>
+    <section id="how">
+      <h2>What it does</h2>
+      <p class="sub">A 30-day challenge, run from the chat you already have open.</p>
+      <div class="grid">
+        <div class="card"><h3>Morning check-ins</h3><p>Today's one outcome at 8am your time, and it remembers what you committed to.</p></div>
+        <div class="card"><h3>Posts in your voice</h3><p>"Day N of 30" drafts. Reply "post it" and it publishes to X, LinkedIn or Bluesky.</p></div>
+        <div class="card"><h3>Outreach coaching</h3><p>Who to target, cold email copy, send timing, deliverability and follow-ups.</p></div>
+        <div class="card"><h3>Launch checks</h3><p>Pressure-tests launch plans and landing copy, and looks up competitors.</p></div>
+      </div>
+    </section>
+
+    <section id="setup">
+      <h2>Set it up in about 15 minutes</h2>
+      <p class="sub">Each person or team runs their own copy, so your conversations stay on your server. No coding needed.</p>
+      <ol class="steps">
+        <li><div><b>Get a free model key</b><span>From <a href="https://aistudio.google.com/apikey">Google AI Studio</a> or <a href="https://console.groq.com/keys">Groq</a>.</span></div></li>
+        <li><div><b>Fill in your settings</b><span>The <a href="setup/">setup page</a> explains every option, generates secrets and gives you a finished <code>.env</code> file. Nothing leaves your browser.</span></div></li>
+        <li><div><b>Deploy it</b><span>Fork the repo and deploy it on Railway or Render, or run <code>npm start</code> on your laptop to try the browser chat first.</span></div></li>
+        <li><div><b>Connect a channel and say hi</b><span>WhatsApp's free test number, Twilio SMS, iMessage via BlueBubbles, or email via Postmark. <a href="https://github.com/dh8116/pitchside#setting-up-each-channel">Channel guides</a>.</span></div></li>
+      </ol>
+    </section>
+
+    <section class="final">
+      <h2>Start your 30 days.</h2>
+      <p class="sub">Free to run, open source, and yours to change.</p>
+      <div class="cta">
+        <a class="btn primary" href="setup/">Set up Pitchside</a>
+        <a class="btn" href="https://github.com/dh8116/pitchside">View on GitHub</a>
+      </div>
+    </section>
+
+    <footer>
+      <span>Pitchside · MIT license</span>
+      <a href="https://github.com/dh8116/pitchside">github.com/dh8116/pitchside</a>
+    </footer>
   </div>
-
-<script>
-'use strict';
-const $ = (id) => document.getElementById(id);
-const DEFAULT_REPO = 'dh8116/pitchside';
-
-// Extra knowledge for Pitchside's variables. Other repos get the generic parser only.
-const PRESETS = {
-  'dh8116/pitchside': {
-    oneOf: [{ keys: ['GEMINI_API_KEY', 'GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'LLM_BASE_URL'], label: 'a model key (Gemini and Groq are free)' }],
-    generate: ['WEBHOOK_SECRET', 'WHATSAPP_VERIFY_TOKEN'],
-    groupNotes: {
-      'Channels': 'Everything below is optional: a channel switches on when its values are filled. The browser test chat works with only a model key.',
-      'Auto-posting': 'Optional. Lets Pitchside publish the posts it drafts. Leave POST_OWNERS empty and nobody can post.',
-    },
-    help: {
-      GEMINI_API_KEY: 'Free. Create one at https://aistudio.google.com/apikey',
-      GROQ_API_KEY: 'Free and very fast. Create one at https://console.groq.com/keys',
-      ANTHROPIC_API_KEY: 'Paid. Best coaching quality and turns on web search for competitor checks. https://console.anthropic.com',
-      PUBLIC_URL: 'The https address your server is reachable at (your Railway/Render URL, or a cloudflared/ngrok tunnel). Must match exactly what Twilio calls.',
-      WEBHOOK_SECRET: 'Any long random string. Hit Generate. It goes on the end of the iMessage and email webhook URLs as ?secret=…',
-      WHATSAPP_TOKEN: 'Meta for Developers → your app → WhatsApp → API Setup → access token (use a permanent system-user token for production).',
-      WHATSAPP_PHONE_NUMBER_ID: 'Meta for Developers → WhatsApp → API Setup, under the test or your own number.',
-      WHATSAPP_VERIFY_TOKEN: 'You choose this. Hit Generate, then paste the same value into WhatsApp → Configuration → Verify token.',
-      WHATSAPP_APP_SECRET: 'Meta for Developers → App settings → Basic → App secret. Used to verify webhook signatures.',
-      POST_OWNERS: 'Your own number or email (and "web" for the local test chat), comma-separated. Only these people can make Pitchside post.',
-      X_API_KEY: 'developer.x.com → your app (set to Read and Write) → Keys and tokens → API Key.',
-      LINKEDIN_AUTHOR: 'urn:li:person:<id> for your profile, or urn:li:organization:<id> for a company page.',
-      BLUESKY_APP_PASSWORD: 'Not your real password: bsky.app → Settings → Privacy and security → App passwords.',
-    },
-  },
-};
-
-const SECRET_NAME = /(^|_)(SECRET|PASSWORD|TOKEN|KEY|PASS|SALT|JWT)(_|$)/;
-// Names that are issued by a provider rather than invented by you.
-const ISSUED = /(API|APP|CLIENT|ACCOUNT|AUTH|ACCESS|CONSUMER)_(KEY|SECRET|TOKEN)|_TOKEN_SECRET$|_API_KEY$|SERVER_TOKEN$|^[A-Z]+_TOKEN$/;
-const GENERATE_HINT = /random|change[-_ ]?me|generate|openssl rand|any long/i;
-
-let model = null;      // { repo, lines, vars, groups }
-const values = new Map();
-
-// ── Parsing ────────────────────────────────────────────────────────────────
-function parseEnvExample(text) {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const vars = [];
-  const groups = [];
-  let group = { title: 'General', vars: [] };
-  let pendingHelp = [];
-  const pushGroup = () => { if (group.vars.length) groups.push(group); };
-
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) { pendingHelp = []; return; }
-    const heading = trimmed.match(/^#+\s*[─━=\-#*]{2,}\s*(.+?)\s*[─━=\-#*]*\s*$/);
-    if (heading) {
-      pushGroup();
-      // "Model: set at least ONE (several = fallback)" → title + note
-      const [, title, note] = heading[1].match(/^(.+?)(?:\s*\((.+)\))?$/);
-      group = { title: title.replace(/:\s*$/, ''), note: note ?? '', vars: [] };
-      pendingHelp = [];
-      return;
-    }
-    const m = trimmed.match(/^(#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (m && (!m[1] || /^[A-Z][A-Z0-9_]*$/.test(m[2]))) {
-      const [, commented, key, rest] = m;
-      const { value, comment } = splitValue(rest);
-      if (vars.some((v) => v.key === key)) return;
-      const v = { key, index, optional: Boolean(commented), example: value, help: [...pendingHelp, comment].filter(Boolean).join(' '), group: group.title };
-      vars.push(v);
-      group.vars.push(v);
-      pendingHelp = [];
-      return;
-    }
-    if (trimmed.startsWith('#')) pendingHelp.push(trimmed.replace(/^#+\s?/, ''));
-  });
-  pushGroup();
-  return { lines, vars, groups };
-}
-
-function splitValue(rest) {
-  rest = rest.trim();
-  const q = rest.match(/^(["'])((?:\\.|(?!\1).)*)\1\s*(?:#\s*(.*))?$/);
-  if (q) return { value: q[2], comment: q[3] ?? '' };
-  const hash = rest.search(/\s#/);
-  return hash === -1 ? { value: rest, comment: '' } : { value: rest.slice(0, hash).trim(), comment: rest.slice(hash).replace(/^\s*#\s*/, '') };
-}
-
-function canGenerate(v, preset) {
-  if (preset?.generate) return preset.generate.includes(v.key);
-  if (ISSUED.test(v.key)) return GENERATE_HINT.test(v.example) || /you choose|random/i.test(v.help);
-  return SECRET_NAME.test(v.key) && (GENERATE_HINT.test(v.example) || GENERATE_HINT.test(v.help) || /SECRET$|SALT$|VERIFY_TOKEN$/.test(v.key));
-}
-
-const isSensitive = (key) => SECRET_NAME.test(key) && !/_URL$|_FROM$|_HANDLE$|_AUTHOR$/.test(key);
-
-function randomSecret(bytes = 32) {
-  const b = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// ── Output ────────────────────────────────────────────────────────────────
-function quote(value) {
-  if (value === '' || /^[A-Za-z0-9_./:@,+\-=]*$/.test(value)) return value;
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
-}
-
-function buildEnv({ onlyFilled }) {
-  if (!model) return '';
-  const byIndex = new Map(model.vars.map((v) => [v.index, v]));
-  const out = [];
-  if (onlyFilled) {
-    for (const v of model.vars) { const val = values.get(v.key); if (val) out.push(`${v.key}=${quote(val)}`); }
-    return out.join('\n') + (out.length ? '\n' : '');
-  }
-  model.lines.forEach((line, i) => {
-    const v = byIndex.get(i);
-    if (!v) { out.push(line); return; }
-    const val = values.get(v.key) ?? '';
-    const tail = splitValue(line.replace(/^\s*#?\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/, '')).comment;
-    const comment = tail ? `   # ${tail}` : '';
-    if (val) out.push(`${v.key}=${quote(val)}${comment}`);
-    else if (v.optional) out.push(line);
-    else out.push(`${v.key}=${comment}`);
-  });
-  return out.join('\n').replace(/\n*$/, '\n');
-}
-
-function renderOutput() {
-  const text = buildEnv({ onlyFilled: $('only-filled').checked });
-  const pre = $('output');
-  pre.replaceChildren();
-  for (const line of text.split('\n')) {
-    const span = document.createElement('span');
-    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (/^\s*#/.test(line)) { span.className = 'c'; span.textContent = line; }
-    else if (m) {
-      const k = Object.assign(document.createElement('span'), { className: 'k', textContent: m[1] });
-      const shown = m[2] && isSensitive(m[1]) && !$('show').checked ? m[2].replace(/^("?)(.{0,4}).*?(\s+#.*)?$/, (_, q, a, c) => `${q}${a}••••••••${c ?? ''}`) : m[2];
-      span.append(k, `=${shown}`);
-    } else span.textContent = line;
-    pre.append(span, '\n');
-  }
-  renderStatus();
-  return text;
-}
-
-function renderStatus() {
-  const preset = PRESETS[model?.repo];
-  const st = $('status');
-  if (!model) { st.textContent = ''; return; }
-  const missing = [];
-  for (const rule of preset?.oneOf ?? []) if (!rule.keys.some((k) => values.get(k))) missing.push(rule.label);
-  const filled = model.vars.filter((v) => values.get(v.key)).length;
-  st.className = `status ${missing.length ? 'todo' : 'ok'}`;
-  st.textContent = missing.length ? `Still needed: ${missing.join(', ')}. ${filled} of ${model.vars.length} filled.` : `${filled} of ${model.vars.length} filled. Ready to save.`;
-}
-
-// ── Form ──────────────────────────────────────────────────────────────────
-function linkified(text) {
-  const frag = document.createDocumentFragment();
-  text.split(/(https?:\/\/[^\s)]*[^\s).,!?:;])/g).forEach((part, i) => {
-    frag.append(i % 2 ? Object.assign(document.createElement('a'), { href: part, textContent: part, target: '_blank', rel: 'noopener noreferrer' }) : part);
-  });
-  return frag;
-}
-
-function renderForm() {
-  const preset = PRESETS[model.repo];
-  const root = $('form');
-  root.replaceChildren();
-  const requiredKeys = new Set((preset?.oneOf ?? []).flatMap((r) => r.keys));
-
-  for (const g of model.groups) {
-    const details = document.createElement('details');
-    details.className = 'group';
-    details.open = true;
-    const summary = document.createElement('summary');
-    const h2 = Object.assign(document.createElement('h2'), { textContent: g.title });
-    const tally = Object.assign(document.createElement('span'), { className: 'tally' });
-    summary.append(h2, tally);
-    details.append(summary);
-    const note = preset?.groupNotes?.[g.title] || g.note;
-    if (note) details.append(Object.assign(document.createElement('p'), { className: 'group-note', textContent: note }));
-
-    const updateTally = () => { tally.textContent = `${g.vars.filter((v) => values.get(v.key)).length}/${g.vars.length}`; };
-    for (const v of g.vars) {
-      const field = document.createElement('div');
-      field.className = 'field';
-      field.dataset.key = v.key.toLowerCase();
-      const id = `f-${v.key}`;
-      const head = document.createElement('div');
-      head.className = 'head';
-      head.append(Object.assign(document.createElement('label'), { htmlFor: id, textContent: v.key }));
-      if (requiredKeys.has(v.key)) head.append(Object.assign(document.createElement('span'), { className: 'tag req', textContent: 'one of these' }));
-      else if (v.optional) head.append(Object.assign(document.createElement('span'), { className: 'tag', textContent: v.example ? `optional · default ${v.example}` : 'optional' }));
-      field.append(head);
-      const help = preset?.help?.[v.key] || v.help;
-      if (help) { const p = document.createElement('p'); p.className = 'help'; p.append(linkified(help)); field.append(p); }
-
-      const row = document.createElement('div');
-      row.className = 'row';
-      const input = Object.assign(document.createElement('input'), {
-        id, value: values.get(v.key) ?? '', placeholder: v.example || '', spellcheck: false, autocomplete: 'off',
-        type: isSensitive(v.key) && !$('show').checked ? 'password' : 'text',
-      });
-      input.dataset.sensitive = isSensitive(v.key) ? '1' : '';
-      input.oninput = () => {
-        const val = input.value.trim();
-        val ? values.set(v.key, val) : values.delete(v.key);
-        field.classList.toggle('filled', Boolean(val));
-        updateTally();
-        renderOutput();
-      };
-      row.append(input);
-      if (canGenerate(v, preset)) {
-        const gen = Object.assign(document.createElement('button'), { type: 'button', className: 'btn small', textContent: 'Generate' });
-        gen.dataset.generate = v.key;
-        gen.onclick = () => { input.value = randomSecret(); input.oninput(); };
-        row.append(gen);
-      }
-      field.append(row);
-      field.classList.toggle('filled', Boolean(values.get(v.key)));
-      details.append(field);
-    }
-    updateTally();
-    root.append(details);
-  }
-  $('gen-all').hidden = !root.querySelector('[data-generate]');
-  applyFilter();
-  renderOutput();
-}
-
-function applyFilter() {
-  const q = $('filter').value.trim().toLowerCase();
-  for (const f of document.querySelectorAll('.field')) f.hidden = Boolean(q) && !f.dataset.key.includes(q) && !f.textContent.toLowerCase().includes(q);
-}
-
-// ── Loading ──────────────────────────────────────────────────────────────
-function resolveSource(input) {
-  const s = input.trim();
-  const raw = s.match(/^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/);
-  if (raw) return { repo: `${raw[1]}/${raw[2]}`.toLowerCase(), url: s };
-  const gh = s.match(/^(?:https:\/\/github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:@([\w./-]+)|\/(?:tree|blob)\/([\w.-]+)(?:\/(.+))?)?\/?$/);
-  if (!gh) throw new Error('Use owner/repo, a github.com link, or a raw.githubusercontent.com URL. For anything else, use "Paste instead".');
-  const params = new URLSearchParams(location.search);
-  const ref = gh[3] || gh[4] || params.get('ref') || 'HEAD';
-  let file = gh[5] || params.get('path') || '.env.example';
-  if (!/\.env[^/]*$/.test(file)) file = `${file.replace(/\/$/, '')}/.env.example`;
-  return { repo: `${gh[1]}/${gh[2]}`.toLowerCase(), url: `https://raw.githubusercontent.com/${gh[1]}/${gh[2]}/${ref}/${file}` };
-}
-
-function setMsg(text, error = false) { $('msg').textContent = text; $('msg').className = `msg${error ? ' error' : ''}`; }
-
-function useText(text, repo, origin) {
-  const parsed = parseEnvExample(text);
-  if (!parsed.vars.length) throw new Error('No variables found. Is that really a .env.example?');
-  model = { ...parsed, repo };
-  values.clear();
-  renderForm();
-  setMsg(`Loaded ${parsed.vars.length} variables from ${origin}.`);
-  $('notice').hidden = true;
-}
-
-async function load(input) {
-  let src;
-  try { src = resolveSource(input); } catch (err) { return setMsg(err.message, true); }
-  setMsg('Loading…');
-  try {
-    const res = await fetch(src.url, { credentials: 'omit', cache: 'no-store' });
-    if (!res.ok) throw new Error(res.status === 404 ? `No file at ${src.url}. Check the repo is public, and the branch and path.` : `GitHub returned ${res.status}.`);
-    useText(await res.text(), src.repo, src.repo);
-    const url = new URL(location.href);
-    url.search = src.repo === DEFAULT_REPO ? '' : `?repo=${encodeURIComponent(input.trim())}`;
-    history.replaceState(null, '', url);
-  } catch (err) {
-    setMsg(err.message === 'Failed to fetch' ? 'Could not reach GitHub. Check your connection, or paste the file instead.' : err.message, true);
-  }
-}
-
-// ── Wiring ───────────────────────────────────────────────────────────────
-$('loader').onsubmit = (e) => { e.preventDefault(); load($('source').value || DEFAULT_REPO); };
-$('paste-toggle').onclick = () => { $('paste').hidden = !$('paste').hidden; if (!$('paste').hidden) $('paste').focus(); };
-$('paste').oninput = () => {
-  const text = $('paste').value;
-  if (!text.trim()) return;
-  try { useText(text, $('source').value.trim().toLowerCase() || 'pasted', 'pasted text'); } catch (err) { setMsg(err.message, true); }
-};
-$('filter').oninput = applyFilter;
-$('only-filled').onchange = renderOutput;
-$('show').onchange = () => {
-  for (const i of document.querySelectorAll('input[data-sensitive="1"]')) i.type = $('show').checked ? 'text' : 'password';
-  renderOutput();
-};
-$('gen-all').onclick = () => {
-  let n = 0;
-  for (const b of document.querySelectorAll('[data-generate]')) {
-    const input = b.previousElementSibling;
-    if (!input.value) { b.click(); n++; }
-  }
-  setMsg(n ? `Generated ${n} secret${n === 1 ? '' : 's'}.` : 'Every generatable secret already has a value.');
-};
-$('copy').onclick = async () => {
-  try { await navigator.clipboard.writeText(buildEnv({ onlyFilled: $('only-filled').checked })); $('copy').textContent = 'Copied ✓'; }
-  catch { $('copy').textContent = 'Copy failed'; }
-  setTimeout(() => { $('copy').textContent = 'Copy'; }, 1600);
-};
-$('download').onclick = () => {
-  const blob = new Blob([buildEnv({ onlyFilled: $('only-filled').checked })], { type: 'text/plain' });
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: '.env' });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  $('notice').textContent = 'Saved. Some browsers rename dotfiles to "env" or "_env"; if so, rename it to .env and put it in the project folder. Never commit it.';
-  $('notice').hidden = false;
-};
-window.addEventListener('beforeunload', (e) => { if (values.size) e.preventDefault(); });
-
-const initial = new URLSearchParams(location.search).get('repo') || DEFAULT_REPO;
-$('source').value = initial;
-load(initial);
-</script>
 </body>
 </html>

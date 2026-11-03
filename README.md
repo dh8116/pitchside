@@ -68,7 +68,7 @@ Open the browser chat to try the coach before you wire up any messaging channel.
 
 Requires Node 20.12+ and one model key (see the table above).
 
-**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/) loads this repo's `.env.example`, explains every setting, generates secrets in one click, and gives you a finished `.env` to copy or download. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
+**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/setup/) loads this repo's `.env.example`, explains every setting, generates secrets in one click, and gives you a finished `.env` to copy or download. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
 
 ## "I just want to message it": the 15-minute setup
 
@@ -164,7 +164,7 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 - `src/llm.js` hides the model provider behind one `complete()` call and chains providers for fallback. On Claude, a declined request is also rerun server-side on a fallback model.
 - `src/knowledge.js` holds the coaching playbooks, written from scratch.
 - `src/posting/` holds one small client per platform (X uses OAuth 1.0a, LinkedIn the Posts API, Bluesky the AT Protocol), plus the owner check and the confirm-before-posting flow.
-- `docs/index.html` is the `.env` builder, served by GitHub Pages from the `docs/` folder.
+- `docs/` is the GitHub Pages site: `index.html` is the landing page and `setup/index.html` is the `.env` builder.
 
 ## Deploying
 
