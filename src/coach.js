@@ -122,7 +122,7 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
     if (!wantsResearch(turnText)) return { block: '', note: null, ask: true };
     const online = connectivity ? await connectivity.check() : true;
     if (!online) return { block: '', note: "I'm offline, so I can't search the web. This is from what I already know.", ask: false };
-    if (!searcher || llm.nativeSearch) return { block: '', note: null, ask: true }; // Claude and Meta search by themselves
+    if (!searcher || llm.nativeSearch) return { block: '', note: null, ask: true }; // Meta searches by itself
     const previous = [...user.messages].reverse().find((m) => m.role === 'user' && !m.content.startsWith('('))?.content ?? '';
     const query = searchQuery(turnText, previous);
     const found = await searcher(query);

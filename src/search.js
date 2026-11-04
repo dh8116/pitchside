@@ -1,5 +1,5 @@
 // Web search for providers that have no built-in search tool (Gemini, Groq, Ollama, any
-// OpenAI-compatible endpoint). Claude and the Meta Model API search natively instead.
+// OpenAI-compatible endpoint). The Meta Model API searches natively instead.
 //
 // Backends, first one that is configured wins:
 //   BRAVE_API_KEY   https://brave.com/search/api   (free tier)

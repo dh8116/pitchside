@@ -43,14 +43,23 @@ Pitchside is built around the [Meta Model API](https://dev.meta.ai/docs): **Muse
 
 Free tiers have rate limits, which is fine for one person or a small group.
 
+### Meta Model API details
+- **Request shape.** `POST /v1/responses` with `input`, `max_output_tokens`, `reasoning.effort` and `tools: [{ type: "web_search" }]`. Source links from `url_citation` annotations are appended as `Sources:`. Search grounding is billed per search, so `PITCHSIDE_WEB_SEARCH=0` turns it off.
+- **Tuning.** `META_REASONING` (`minimal` to `max`, default `low`), `META_MAX_OUTPUT_TOKENS` (default 4000; reasoning tokens count against it), `META_SEARCH_CONTEXT` (`low`/`medium`/`high`), `META_MODEL`, `META_API_BASE`.
+- **Limits and billing.** Limits are per team. A 429 shows Meta's own wait with a countdown, a 402 says billing isn't set up and links to [pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits), and a 503 is retried once.
+- **Voice.** With a Meta key set, the web chat's Talk and Call buttons record the microphone and send a 16 kHz mono WAV to `POST /api/web/transcribe`, which calls Meta Voice Transcribe (`muse-voice-transcribe-1.0`). It works in any browser, including ones without speech recognition. `META_VOICE=0` turns it off.
+- **Check your setup.** `npm run meta:check` (add `-- --voice` for Voice Transcribe) tests the key, a plain reply, a reply with web search and optionally transcription, and prints what to fix.
+
+Built for the Meta hackathon.
+
 ### Web search and working offline
-- **Meta and Claude search the web natively.** Pitchside turns it on for competitor checks, launch research and pricing questions. `PITCHSIDE_WEB_SEARCH=0` turns it off.
+- **Meta searches the web natively** (as does the optional Claude provider). Pitchside turns it on for competitor checks, launch research and pricing questions. `PITCHSIDE_WEB_SEARCH=0` turns it off.
 - **Gemini, Groq and Ollama get a `web_search` tool** that Pitchside runs for them. It uses `BRAVE_API_KEY` or `TAVILY_API_KEY` if set (both have free tiers), otherwise a keyless DuckDuckGo lookup (best effort).
 - **Offline works, automatically.** Install [Ollama](https://ollama.com) and run `ollama pull qwen2.5:3b`. With a cloud key set, Pitchside switches to the local model on its own when the internet drops, and back when it returns. With no key at all it uses the local model by itself. No `OLLAMA_MODEL` needed (set it to pick a specific model; `OLLAMA_AUTO=0` turns the automatic fallback off). Coaching, memory, check-ins and the browser chat need no internet. Searching is paused and the coach answers from what it knows.
 - **Local models get a lighter request** so replies come back in seconds on a laptop: a short coaching prompt, recent history only, a capped reply length and one trimmed search round. The model is loaded when the server starts.
 - **Posting waits for a connection.** Drafting keeps working offline and drafts are saved. The Post buttons grey out and "post it" is held until the app is online again, then they work as normal. `ONLINE_CHECK_URL` sets which address is used to check the connection.
 
-- **Searches by itself when a question needs it.** Competitors, pricing, news, programs and "look it up" questions are searched first and the results handed to the model, so even small local models answer from fresh sources. Offline, or if the search fails, Pitchside says so in its own words ("I'm offline, so I can't search the web. This is from what I already know.") and answers from what it knows. Claude and Meta search natively.
+- **Searches by itself when a question needs it.** Competitors, pricing, news, programs and "look it up" questions are searched first and the results handed to the model, so even small local models answer from fresh sources. Offline, or if the search fails, Pitchside says so in its own words ("I'm offline, so I can't search the web. This is from what I already know.") and answers from what it knows. Meta searches natively, so it needs no pre-search.
 
 ### Short, direct replies
 Pitchside answers first and skips the wind-up: no "Sure" or "That's a question about…", and a decision question gets "Yes.", "No." or "Not yet." with one reason before anything else. A reply is capped at 4 short bubbles (about 700 characters) unless you ask for detail, a plan or an explanation (then up to 8). Drafts are never cut, a closing question is kept, and stray `*emphasis*`, headings and code fences are stripped. In the web chat the bubbles arrive one at a time with typing dots between them (not with reduced-motion settings).
@@ -197,7 +206,7 @@ How it behaves:
 WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*  (verify + normalise)
                                                               │
                                                               ▼
-                                                        src/coach.js  ── Claude (Messages API, web search)
+                                                        src/coach.js  ── Meta Model API (Responses API, web search)
                                                               │           per-person memory + 30-day state
                                                               ▼
                                                         src/format.js  reply → bubbles, <post> → tap-to-post links
@@ -213,7 +222,7 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 - Messages from one person are processed one at a time, and retried webhooks are de-duplicated by message ID.
 - Each person is one JSON file in `DATA_DIR`. Back it up, or swap `src/users.js` for a database.
 - The system prompt lives in `src/prompts.js`. Change the coach's personality there.
-- `src/llm.js` hides the model provider behind one `complete()` call and chains providers for fallback. On Claude, a declined request is also rerun server-side on a fallback model.
+- `src/llm.js` hides the model provider behind one `complete()` call and chains providers for fallback. Meta is called through the Responses API (`src/llm.js`: reasoning effort, output budget, search grounding, one retry on a 503).
 - `src/knowledge.js` holds the coaching playbooks, written from scratch.
 - `src/posting/` holds one small client per platform (X uses OAuth 1.0a, LinkedIn the Posts API, Bluesky the AT Protocol), plus the owner check and the confirm-before-posting flow.
 - `docs/` is the GitHub Pages site: `index.html` is the landing page and `setup/index.html` is the `.env` builder.
