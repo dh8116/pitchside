@@ -1175,3 +1175,37 @@ test('evening nudge: one fixed line when the morning check-in went unanswered, n
     server.close();
   }
 });
+
+test('local models stream their reply (no five-minute header wait) and a silent local model is reported as such, not as "offline"', async () => {
+  const enc = new TextEncoder();
+  const sse = (...events) => events.map((e) => `data: ${typeof e === 'string' ? e : JSON.stringify(e)}\n\n`).join('');
+  const streamOf = (text, cut) => new ReadableStream({ start(c) { c.enqueue(enc.encode(text.slice(0, cut))); c.enqueue(enc.encode(text.slice(cut))); c.close(); } });
+  const bodies = [];
+  const replies = [
+    // 1st request: a search call split across chunks, then 2nd: the answer in pieces, cut mid-line.
+    sse({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'web_', arguments: '{"que' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'search', arguments: 'ry":"dental"}' } }] } }] }, '[DONE]'),
+    sse({ choices: [{ delta: { content: 'Verdict: ' } }] }, { choices: [{ delta: { content: 'two rivals.' } }] }, '[DONE]'),
+  ];
+  const fetchImpl = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    const text = replies.shift();
+    return { ok: true, body: streamOf(text, 37) };
+  };
+  const llm = openaiCompatibleLLM({ name: 'ollama', baseUrl: 'http://x/v1', apiKey: 'k', model: 'q', local: true, search: async (q) => `results for ${q}`, fetchImpl });
+  assert.equal(await llm.complete({ system: 's', messages: [{ role: 'user', content: 'competitors?' }], webSearch: true }), 'Verdict: two rivals.');
+  assert.equal(bodies[0].stream, true);
+  assert.equal(bodies[1].messages.find((m) => m.role === 'tool').content, 'results for dental');
+  assert.equal(bodies[1].messages.find((m) => m.tool_calls).tool_calls[0].function.name, 'web_search');
+
+  const cloud = openaiCompatibleLLM({ name: 'g', baseUrl: 'http://x/v1', apiKey: 'k', model: 'q', fetchImpl: async (u, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ choices: [{ message: { content: 'hi' } }] }) }; } });
+  await cloud.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(bodies.at(-1).stream, undefined, 'cloud providers are untouched');
+
+  // Ollama not answering: the error names the real problem even when the internet is also down.
+  const conn = createConnectivity({ fetchImpl: async () => ({}) });
+  const cloudDown = { name: 'cloud', supportsWebSearch: false, complete: async () => { throw networkDown(); } };
+  const localDown = { name: 'local', local: true, supportsWebSearch: false, complete: async () => { throw networkDown(); } };
+  await assert.rejects(chainLLM([cloudDown, localDown], { connectivity: conn, log: { warn() {} } }).complete({}), { code: 'LOCAL_DOWN' });
+  await assert.rejects(chainLLM([localDown], { connectivity: conn, log: { warn() {} } }).complete({}), { code: 'LOCAL_DOWN' });
+});

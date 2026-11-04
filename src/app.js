@@ -37,6 +37,7 @@ function friendlyError(err) {
   // at all when the Anthropic SDK finds no credentials before sending.
   if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) return 'The model API key is missing or invalid. Check GEMINI_API_KEY / GROQ_API_KEY / MODEL_API_KEY / ANTHROPIC_API_KEY in .env.';
   if (err?.status === 429) return 'Rate limited by the API. Give it a minute.';
+  if (err?.code === 'LOCAL_DOWN') return "The local model isn't answering. Check that Ollama is running (`ollama serve`) and that the model is installed. It can also be slow on this machine: try again, or switch to a smaller model like qwen2.5:3b.";
   if (err?.code === 'NO_LOCAL_MODEL' || isNetworkError(err)) return "I can't reach the internet and there's no local model to fall back on. Install Ollama (ollama.com), run `ollama pull qwen2.5:3b`, and I'll use it automatically when offline.";
   return 'Something went wrong on my side. Try again in a moment.';
 }

@@ -72,6 +72,38 @@ const SEARCH_TOOL = {
 };
 const MAX_SEARCH_ROUNDS = 3;
 
+/** Reads an OpenAI-style server-sent-events reply into the same shape a non-streaming reply has. */
+async function collectStream(res) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  const calls = [];
+  const take = (line) => {
+    if (!line.startsWith('data:')) return;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') return;
+    let delta;
+    try { delta = JSON.parse(payload).choices?.[0]?.delta; } catch { return; }
+    if (delta?.content) content += delta.content;
+    for (const tc of delta?.tool_calls ?? []) {
+      const call = (calls[tc.index ?? calls.length] ??= { id: tc.id, type: 'function', function: { name: '', arguments: '' } });
+      if (tc.id) call.id = tc.id;
+      if (tc.function?.name) call.function.name += tc.function.name;
+      if (tc.function?.arguments) call.function.arguments += tc.function.arguments;
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) { take(buffer.slice(0, nl).trim()); buffer = buffer.slice(nl + 1); }
+  }
+  take(buffer.trim());
+  return { choices: [{ message: { content, tool_calls: calls.length ? calls.filter(Boolean) : undefined } }] };
+}
+
 /** Keeps the most recent messages, starting on a user turn. */
 function recent(messages, n) {
   const kept = messages.slice(-n);
@@ -92,13 +124,15 @@ export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, local = fals
       method: 'POST',
       signal,
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model, max_tokens: maxTokens, ...body }),
+      // A local model on a slow machine can take minutes to answer. Streaming sends the headers at once, so
+      // fetch's five-minute wait-for-headers limit never trips; the pieces are put back together below.
+      body: JSON.stringify({ model, max_tokens: maxTokens, ...(local ? { stream: true } : {}), ...body }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw Object.assign(new Error(`${name} → ${res.status}: ${text.slice(0, 300)}`), { status: res.status });
     }
-    return res.json();
+    return local && res.body?.getReader ? collectStream(res) : res.json();
   }
   return {
     name: `${name} (${model})`,
@@ -210,7 +244,9 @@ export function chainLLM(providers, { log = console, connectivity = null } = {})
         } catch (err) {
           lastErr = err;
           if (!p.local && isNetworkError(err)) connectivity?.markOffline();
-          if (!retryable(err) || i === providers.length - 1) throw err;
+          // The local model not answering says nothing about the internet, so say what is actually wrong.
+          if (p.local && isNetworkError(err)) lastErr = Object.assign(new Error('the local model did not answer'), { status: 503, code: 'LOCAL_DOWN', cause: err });
+          if (!retryable(err) || i === providers.length - 1) throw lastErr;
           log.warn?.(`${p.name} failed (${err.status ?? err.message}); trying ${providers[i + 1].name}`);
         }
       }
