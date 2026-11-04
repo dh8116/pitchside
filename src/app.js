@@ -6,6 +6,7 @@ import { CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
 import { INTRO_PROMPT } from './import.js';
+import { DEFAULT_SETUP_URL, rateLimitInfo, rateLimitText } from './limits.js';
 
 const IMPORT_SOURCES = new Set(['paste', 'file', 'url']);
 const MAX_IMPORT_TEXT = 300_000; // characters accepted from the browser; the coach keeps the first part
@@ -36,15 +37,27 @@ function friendlyError(err) {
   // Bad keys: 401 on most APIs, 400 "API key not valid" on Gemini, or no status
   // at all when the Anthropic SDK finds no credentials before sending.
   if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) return 'The model API key is missing or invalid. Check GEMINI_API_KEY / GROQ_API_KEY / MODEL_API_KEY / ANTHROPIC_API_KEY in .env.';
-  if (err?.status === 429) return 'Rate limited by the API. Give it a minute.';
   if (err?.code === 'LOCAL_DOWN') return "The local model isn't answering. Check that Ollama is running (`ollama serve`) and that the model is installed. It can also be slow on this machine: try again, or switch to a smaller model like qwen2.5:3b.";
   if (err?.code === 'NO_LOCAL_MODEL' || isNetworkError(err)) return "I can't reach the internet and there's no local model to fall back on. Install Ollama (ollama.com), run `ollama pull qwen2.5:3b`, and I'll use it automatically when offline.";
   return 'Something went wrong on my side. Try again in a moment.';
 }
 
-export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', connectivity = null, log = console, now = () => Date.now() }) {
+export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', connectivity = null, setupUrl = DEFAULT_SETUP_URL, log = console, now = () => Date.now() }) {
   // Wrong-passcode attempts per client address, so the passcode can't be guessed by brute force.
   const failures = new Map();
+
+  /** A failed model call as an HTTP answer. Rate limits carry exactly how long to wait and the buttons to go further. */
+  function fail(res, err) {
+    const limit = rateLimitInfo(err, { setupUrl });
+    if (!limit) return send(res, 502, { error: friendlyError(err) });
+    return send(res, 429, { error: limit.message, limit }, { 'content-type': 'application/json', ...(limit.seconds != null ? { 'retry-after': String(limit.seconds) } : {}) });
+  }
+
+  /** The same, for a channel with no buttons: a message that says how long and where to go. */
+  const failureText = (err) => {
+    const limit = rateLimitInfo(err, { setupUrl });
+    return limit ? rateLimitText(limit) : friendlyError(err);
+  };
 
   function checkPasscode(req) {
     if (!webChatPassword) return null;
@@ -101,7 +114,11 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
         send(res, result.status, result.body, result.headers);
         // Reply asynchronously: the model takes longer than webhook timeouts allow.
         for (const m of result.messages) {
-          coach.handleInbound(m).catch((err) => log.error(`reply failed for ${m.key}`, err));
+          coach.handleInbound(m).catch((err) => {
+            log.error(`reply failed for ${m.key}`, err);
+            // Not silence: say what went wrong (and, for a rate limit, how long to wait).
+            coach.tell?.({ key: m.key, channel: m.channel, address: m.address }, [{ type: 'text', text: failureText(err) }]);
+          });
         }
         return;
       }
@@ -121,7 +138,7 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
             return send(res, 200, { bubbles });
           } catch (err) {
             log.error(err);
-            return send(res, 502, { error: friendlyError(err) });
+            return fail(res, err);
           }
         }
         if (req.method === 'POST' && pathname === '/api/web/post') {
@@ -134,7 +151,7 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
             return send(res, 200, { bubbles: await coach.publishDraft({ key: `web:${id}`, postId }) });
           } catch (err) {
             log.error(err);
-            return send(res, 502, { error: friendlyError(err) });
+            return fail(res, err);
           }
         }
         // Import dialog: the prompt to paste into ChatGPT / Claude / Gemini, and the import itself.
@@ -158,7 +175,7 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
             return send(res, 200, { bubbles });
           } catch (err) {
             log.error(err);
-            return send(res, 502, { error: friendlyError(err) });
+            return fail(res, err);
           }
         }
         // The chat polls this: while offline its Post buttons grey out, and they come back when this says true.

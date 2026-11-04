@@ -110,6 +110,7 @@ const handler = createApp({
   webChat: env.WEB_CHAT !== '0',
   webChatPassword: env.WEB_CHAT_PASSWORD ?? '',
   connectivity,
+  setupUrl: env.SETUP_URL || undefined,
 });
 
 http.createServer(handler).listen(port, () => {

@@ -1312,3 +1312,82 @@ test('auto search: questions that need the web are searched first; offline or a 
   assert.equal(wantsResearch('Who should I cold email first?'), false);
   assert.equal(searchQuery('look it up', 'pricing for Calendly'), 'pricing for Calendly');
 });
+
+import { retryAfterSeconds, rateLimitInfo, rateLimitText, DEFAULT_SETUP_URL } from '../src/limits.js';
+import { formatWait } from '../public/wait.js';
+
+test('rate limits: the exact wait is read from each provider, and formatted for people', () => {
+  assert.equal(retryAfterSeconds(new Error('groq → 429: {"error":{"message":"Rate limit reached ... Please try again in 6m32.1s. Need more tokens?"}}')), 393);
+  assert.equal(retryAfterSeconds(new Error('Please try again in 2h3m4.5s.')), 7385);
+  assert.equal(retryAfterSeconds(new Error('Please try again in 450ms.')), 1);
+  assert.equal(retryAfterSeconds(new Error('Please try again in 1.5s')), 2);
+  assert.equal(retryAfterSeconds(new Error('gemini → 429: Please retry in 34.2s.')), 35);
+  assert.equal(retryAfterSeconds(new Error('{"details":[{"retryDelay":"17s"}]}')), 17);
+  assert.equal(retryAfterSeconds(Object.assign(new Error('x'), { headers: new Headers({ 'retry-after': '45' }) })), 45);
+  assert.equal(retryAfterSeconds(Object.assign(new Error('x'), { headers: { 'retry-after': '12' } })), 12);
+  assert.equal(retryAfterSeconds(Object.assign(new Error('x'), { headers: { 'retry-after': new Date(Date.now() + 90_000).toUTCString() } })) >= 89, true);
+  assert.equal(retryAfterSeconds(new Error('Rate limited')), null, 'never invents a number');
+
+  assert.deepEqual(['1', 1, 45, 60, 61, 392.1, 3600, 3660, 7385].map(formatWait), ['1s', '1s', '45s', '1m', '1m 1s', '6m 33s', '1h', '1h 1m', '2h 3m']);
+});
+
+test('rate limits: who is limited, the shortest wait, and the buttons (add another key, top up)', () => {
+  const groq = rateLimitInfo(Object.assign(new Error('groq → 429: Please try again in 6m32.1s'), { status: 429, provider: 'groq' }));
+  assert.equal(groq.message, 'Groq is rate limited. Try again in 6m 33s.');
+  assert.equal(groq.seconds, 393);
+  assert.equal(groq.setupUrl, DEFAULT_SETUP_URL);
+  assert.deepEqual(groq.topUp, [{ provider: 'groq', name: 'Groq', url: 'https://console.groq.com/settings/billing' }]);
+
+  const both = rateLimitInfo(Object.assign(new Error('x'), { status: 429, limits: [{ provider: 'gemini', seconds: 120 }, { provider: 'groq', seconds: 45 }] }), { setupUrl: 'https://me.example/setup' });
+  assert.equal(both.message, 'Gemini and Groq are rate limited. Try again in 45s.', 'the shortest wait: when the first one answers again');
+  assert.deepEqual(both.topUp.map((t) => t.name), ['Gemini', 'Groq']);
+  assert.equal(both.setupUrl, 'https://me.example/setup');
+
+  const unknown = rateLimitInfo(Object.assign(new Error('Rate limited'), { status: 429 }));
+  assert.equal(unknown.message, "The model API is rate limited, and didn't say for how long.");
+  assert.equal(unknown.seconds, null);
+  assert.deepEqual(unknown.topUp, []);
+  assert.equal(rateLimitInfo(Object.assign(new Error('boom'), { status: 500 })), null);
+  assert.match(rateLimitText(groq), /^Groq is rate limited\. Try again in 6m 33s\. You can add another key: https:\/\/dh8116\.github\.io\/pitchside\/setup\/ · top up Groq: https:\/\/console\.groq\.com/);
+});
+
+test('rate limits: the provider chain reports every limited provider and the HTTP answer carries the wait and the buttons', async () => {
+  const limited = (name, message, headers) => ({ name: `${name} (m)`, supportsWebSearch: false, complete: async () => { throw Object.assign(new Error(message), { status: 429, headers }); } });
+  const chain = chainLLM([limited('gemini', 'gemini → 429: Please retry in 120s.'), limited('groq', 'groq → 429: x', new Headers({ 'retry-after': '45' }))], { log: { warn() {} } });
+  const err = await chain.complete({}).catch((e) => e);
+  assert.deepEqual(err.limits, [{ provider: 'gemini', seconds: 120 }, { provider: 'groq', seconds: 45 }]);
+
+  const users = await tmpStore();
+  const coach = createCoach({ llm: chain, users });
+  const app = createApp({ coach, users, channels: {}, publicDir: path.resolve('public'), log: { error() {} }, setupUrl: 'https://me.example/setup' });
+  const server = http.createServer(app).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await fetch(`${base}/api/web/chat`, { method: 'POST', body: JSON.stringify({ id: '11111111-2222-3333-4444-555555555555', text: 'hi' }) });
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get('retry-after'), '45');
+    const body = await res.json();
+    assert.equal(body.error, 'Gemini and Groq are rate limited. Try again in 45s.');
+    assert.equal(body.limit.setupUrl, 'https://me.example/setup');
+    assert.deepEqual(body.limit.topUp.map((t) => t.provider), ['gemini', 'groq']);
+    assert.equal(body.limit.seconds, 45);
+  } finally {
+    server.close();
+  }
+});
+
+test('a failed reply on SMS/WhatsApp is no longer silent: the person is told, with the wait for a rate limit', async () => {
+  const told = [];
+  const coach = { handleInbound: async () => { throw Object.assign(new Error('groq → 429: Please try again in 6m32.1s'), { status: 429, provider: 'groq' }); }, tell: async (p, b) => { told.push([p, b]); } };
+  const channel = { webhook: () => ({ status: 200, headers: {}, body: 'ok', messages: [{ key: 'sms:+1', channel: 'twilio', address: '+1', text: 'hi' }] }) };
+  const app = createApp({ coach, users: await tmpStore(), channels: { twilio: channel }, publicDir: path.resolve('public'), log: { error() {} } });
+  const server = http.createServer(app).listen(0);
+  try {
+    await fetch(`http://127.0.0.1:${server.address().port}/webhooks/twilio`, { method: 'POST', body: 'x' });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(told[0][0], { key: 'sms:+1', channel: 'twilio', address: '+1' });
+    assert.match(told[0][1][0].text, /^Groq is rate limited\. Try again in 6m 33s\. You can add another key: .*top up Groq: /);
+  } finally {
+    server.close();
+  }
+});

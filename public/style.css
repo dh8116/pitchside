@@ -152,3 +152,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .v-status { flex: 1 1 100%; min-height: 1.2em; font-size: 13px; color: var(--muted); }
 .v-status.error { color: var(--error); }
 @media (min-width: 520px) { .v-status { flex: 1 1 0; } }
+
+/* Rate-limit card */
+.msg.limit { max-width: min(86%, 420px); }
+.limit-text { margin: 0; }
+.limit-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.limit-actions .pill { display: inline-block; padding: 7px 14px; border-radius: 18px; border: 1px solid #c7c7cc; background: var(--bg); color: var(--green-dark); font-size: 14px; font-weight: 500; text-decoration: none; }
+.limit-actions .pill.primary { background: var(--sent); border-color: var(--sent); color: #fff; font-weight: 600; }

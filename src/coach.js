@@ -369,5 +369,10 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
     });
   }
 
-  return { handleInbound, checkin, nudge, runCheckins, publishDraft, importContext, flushQueuedPosts };
+  /** Sends a short message to someone outside a normal reply (e.g. to say a reply failed). Never throws. */
+  async function tell(person, bubbles) {
+    try { await deliver(person, bubbles); } catch (err) { log.error('tell failed', person.key, err); }
+  }
+
+  return { tell, handleInbound, checkin, nudge, runCheckins, publishDraft, importContext, flushQueuedPosts };
 }

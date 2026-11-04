@@ -50,6 +50,14 @@ Free tiers have rate limits, which is fine for one person or a small group.
 - **Local models get a lighter request** so replies come back in seconds on a laptop: a short coaching prompt, recent history only, a capped reply length and one trimmed search round. The model is loaded when the server starts.
 - **Posting waits for a connection.** Drafting keeps working offline and drafts are saved. The Post buttons grey out and "post it" is held until the app is online again, then they work as normal. `ONLINE_CHECK_URL` sets which address is used to check the connection.
 
+- **Searches by itself when a question needs it.** Competitors, pricing, news, programs and "look it up" questions are searched first and the results handed to the model, so even small local models answer from fresh sources. Offline, or if the search fails, Pitchside says so in its own words ("I'm offline, so I can't search the web. This is from what I already know.") and answers from what it knows. Claude and Meta search natively.
+
+### Short, direct replies
+Pitchside answers first and skips the wind-up: no "Sure" or "That's a question about…", and a decision question gets "Yes.", "No." or "Not yet." with one reason before anything else. A reply is capped at 4 short bubbles (about 700 characters) unless you ask for detail, a plan or an explanation (then up to 8). Drafts are never cut, a closing question is kept, and stray `*emphasis*`, headings and code fences are stripped. In the web chat the bubbles arrive one at a time with typing dots between them (not with reduced-motion settings).
+
+### Rate limits
+When a provider says to slow down, the chat shows exactly how long to wait (read from the provider's own answer, counting down live) and two buttons: **Add another key**, which opens the [.env builder](https://dh8116.github.io/pitchside/setup/) (`SETUP_URL` points it at your own copy), and **Top up** for each limited provider. With several providers set, the wait shown is the shortest, since that is when the first one answers again. Over SMS, WhatsApp or email the same information comes as one message with the links.
+
 ### Research briefs
 Anything Pitchside looks up (competitors, a market, a prospect) comes back in the same shape every time, so it is quick to scan: a one-line **Verdict**, up to five numbered findings, a **Move** for this week, and an **Unverified** line for anything it couldn't confirm. Every fact ends with the link it came from, and a claim with no source goes under Unverified instead. The prompt carries one hand-built example of the shape, which small local models follow well.
 

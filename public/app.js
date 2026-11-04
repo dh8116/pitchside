@@ -1,4 +1,5 @@
 import { createVoice, voiceSupport } from './voice.js';
+import { formatWait } from './wait.js';
 
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pitchside.webId';
@@ -117,22 +118,42 @@ async function api(path, body) {
   const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (data.passcode) { lock(passcode ? 'That passcode didn\'t work.' : ''); throw new Error('Enter the passcode to keep chatting.'); }
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { limit: data.limit });
   return data;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Replies arrive like texts: a bubble, a moment of typing dots, the next bubble. Skipped for reduced motion,
+// and dropped if the person switched to another chat meanwhile.
+async function reveal(bubbles, chat) {
+  const still = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  for (const [i, bubble] of bubbles.entries()) {
+    if (chat !== webId) return;
+    if (i > 0 && still) {
+      const dots = showTyping();
+      await sleep(Math.min(1300, 300 + (bubble.text?.length ?? 0) * 10));
+      dots.remove();
+      if (chat !== webId) return;
+    }
+    addMessage('in', bubble);
+  }
 }
 
 async function run(request) {
   setBusy(true);
   const dots = showTyping();
   try {
+    const chat = webId;
     const { bubbles } = await request();
     dots.remove();
-    bubbles.forEach((b) => addMessage('in', b));
+    await reveal(bubbles, chat);
     voice?.onReply(bubbles); // reads it out loud when asked, or keeps a call going
     return bubbles;
   } catch (err) {
     dots.remove();
-    addMessage('in', { type: 'text', text: err.message }).classList.add('error');
+    if (err.limit) addLimitCard(err.limit);
+    else addMessage('in', { type: 'text', text: err.message }).classList.add('error');
     voice?.onFailure('Sorry, that did not go through. Try again.');
     return null;
   } finally {
@@ -369,4 +390,27 @@ if (voiceSupport.listen || voiceSupport.speak) {
   $('v-read').onclick = () => voice.toggleReadAloud();
   $('v-call').onclick = () => voice.toggleCall();
   renderVoice(voice.state);
+}
+
+// ---- A rate limit: exactly how long to wait (counting down), and where to go next ----
+function addLimitCard(limit) {
+  $('empty').hidden = true;
+  const text = el('p', { className: 'limit-text', textContent: limit.message });
+  text.setAttribute('aria-live', 'off'); // it ticks every second; screen readers get the first message only
+  const actions = el('div', { className: 'limit-actions' },
+    el('a', { className: 'pill primary', href: limit.setupUrl, target: '_blank', rel: 'noopener', textContent: 'Add another key' }),
+    ...limit.topUp.map((t) => el('a', { className: 'pill', href: t.url, target: '_blank', rel: 'noopener', textContent: `Top up ${t.name}` })));
+  const card = el('div', { className: 'msg in limit' }, text, actions);
+  $('log').append(card);
+  scrollDown();
+  if (limit.seconds != null) {
+    const ends = Date.now() + limit.seconds * 1000;
+    const timer = setInterval(() => {
+      const left = Math.ceil((ends - Date.now()) / 1000);
+      if (!card.isConnected) return clearInterval(timer);
+      if (left <= 0) { text.textContent = 'The wait is over. Send your message again.'; return clearInterval(timer); }
+      text.textContent = `${limit.names} ${limit.names.includes(' and ') ? 'are' : 'is'} rate limited. Try again in ${formatWait(left)}.`;
+    }, 1000);
+  }
+  return card;
 }

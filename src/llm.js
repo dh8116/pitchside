@@ -8,6 +8,7 @@
 
 import { createSearch } from './search.js';
 import { isNetworkError } from './connectivity.js';
+import { retryAfterSeconds } from './limits.js';
 
 const MAX_PAUSE_CONTINUATIONS = 3;
 
@@ -131,7 +132,7 @@ export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, local = fals
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw Object.assign(new Error(`${name} → ${res.status}: ${text.slice(0, 300)}`), { status: res.status });
+      throw Object.assign(new Error(`${name} → ${res.status}: ${text.slice(0, 300)}`), { status: res.status, headers: res.headers });
     }
     return local && res.body?.getReader ? collectStream(res) : res.json();
   }
@@ -206,7 +207,7 @@ export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch }) {
         if (!res.ok) {
           const body = await res.text().catch(() => '');
           if (withSearch && (res.status === 400 || res.status === 422)) { searchRejected = true; continue; }
-          throw Object.assign(new Error(`meta → ${res.status}: ${body.slice(0, 300)}`), { status: res.status });
+          throw Object.assign(new Error(`meta → ${res.status}: ${body.slice(0, 300)}`), { status: res.status, headers: res.headers });
         }
         const data = await res.json();
         const text = textOf(data);
@@ -237,6 +238,7 @@ export function chainLLM(providers, { log = console, connectivity = null } = {})
     async complete(args) {
       const skipCloud = hasLocal && connectivity?.recentlyOffline();
       let lastErr;
+      const limits = []; // every provider that answered "slow down", with how long it asked us to wait
       for (const [i, p] of providers.entries()) {
         if (skipCloud && !p.local) continue;
         try {
@@ -246,10 +248,14 @@ export function chainLLM(providers, { log = console, connectivity = null } = {})
           return text;
         } catch (err) {
           lastErr = err;
+          if (err.status === 429) limits.push({ provider: p.name.split(' ')[0].toLowerCase(), seconds: retryAfterSeconds(err) });
           if (!p.local && isNetworkError(err)) connectivity?.markOffline();
           // The local model not answering says nothing about the internet, so say what is actually wrong.
           if (p.local && isNetworkError(err)) lastErr = Object.assign(new Error('the local model did not answer'), { status: 503, code: 'LOCAL_DOWN', cause: err });
-          if (!retryable(err) || i === providers.length - 1) throw lastErr;
+          if (!retryable(err) || i === providers.length - 1) {
+            if (limits.length) lastErr.limits = limits;
+            throw lastErr;
+          }
           log.warn?.(`${p.name} failed (${err.status ?? err.message}); trying ${providers[i + 1].name}`);
         }
       }
