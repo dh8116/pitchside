@@ -1,7 +1,9 @@
 // The coaching engine: turns an inbound message (from any channel) into reply
 // bubbles, keeps per-person memory, and sends the morning check-ins.
 import { COACH_PROMPT, COACH_PROMPT_LITE, CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
-import { parseReply, stripContextEcho } from './format.js';
+import { parseReply, stripContextEcho, capReply, stripLeadIn, wantsLong, bubblesToRaw } from './format.js';
+import { wantsResearch, searchQuery } from './research.js';
+import { SEARCH_UNAVAILABLE } from './search.js';
 import { newUser } from './users.js';
 import { KNOWLEDGE } from './knowledge.js';
 import { IMPORT_PROMPT, cleanFacts, fetchPage as fetchPublicPage, htmlToText, readableText } from './import.js';
@@ -41,7 +43,7 @@ export function challengeDay(user, now = new Date()) {
   return Math.floor((Date.parse(today) - Date.parse(start)) / DAY_MS) + 1;
 }
 
-export function contextLine(user, now = new Date(), { postingTo = [], offline = false } = {}) {
+export function contextLine(user, now = new Date(), { postingTo = [], offline = false, long = false } = {}) {
   const t = localParts(user.timezone, now);
   const day = challengeDay(user, now);
   const parts = [
@@ -51,6 +53,7 @@ export function contextLine(user, now = new Date(), { postingTo = [], offline = 
     user.notes.length ? `remembered: ${user.notes.join(' | ')}` : 'remembered: nothing yet',
   ];
   if (postingTo.length) parts.push(`app can publish to: ${postingTo.join(', ')}`);
+  parts.push(long ? 'reply length: they asked for detail, up to 8 bubbles' : 'reply length: short, 2-4 bubbles, under 90 words in all');
   if (offline) parts.push('app is offline: no web search right now; draft posts as normal, the app holds them and publishes once it is back online');
   return `[Pitchside context · ${parts.join(' · ')}]`;
 }
@@ -101,7 +104,7 @@ function handleCommand(user, text, now) {
   return null;
 }
 
-export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, fetchPage = fetchPublicPage, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
+export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, searcher = null, fetchPage = fetchPublicPage, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
   const queues = new Map();
 
   async function loadUser(key) {
@@ -110,23 +113,46 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
     return user;
   }
 
+  /**
+   * For questions that need the web (competitors, pricing, news…): search first and hand the model the results,
+   * since small models rarely call a search tool themselves. Offline, or when the search fails, nothing is
+   * searched and `note` says so, in the app's own words rather than the model's.
+   */
+  async function research(user, turnText) {
+    if (!wantsResearch(turnText)) return { block: '', note: null, ask: true };
+    const online = connectivity ? await connectivity.check() : true;
+    if (!online) return { block: '', note: "I'm offline, so I can't search the web. This is from what I already know.", ask: false };
+    if (!searcher || llm.nativeSearch) return { block: '', note: null, ask: true }; // Claude and Meta search by themselves
+    const previous = [...user.messages].reverse().find((m) => m.role === 'user' && !m.content.startsWith('('))?.content ?? '';
+    const query = searchQuery(turnText, previous);
+    const found = await searcher(query);
+    if (found === SEARCH_UNAVAILABLE) return { block: '', note: "I couldn't reach the web just now, so this is from what I already know.", ask: false };
+    return { block: `\n\n[Web results for "${query}", fetched just now]\n${found}\n[End of web results]`, note: null, ask: false };
+  }
+
   /** Model call + reply parsing shared by inbound turns and check-ins. */
   async function coachTurn(user, turnText, t, search) {
     const postingTo = publisher?.platformsFor(user) ?? [];
+    const long = wantsLong(turnText);
+    const found = search ? await research(user, turnText) : { block: '', note: null, ask: false };
     const raw = await llm.complete({
       system: SYSTEM,
       systemLite: COACH_PROMPT_LITE,
-      webSearch: search,
-      messages: buildMessages(user, turnText, t, { postingTo, offline: Boolean(connectivity?.offline) }),
+      webSearch: search && found.ask,
+      messages: buildMessages(user, `${turnText}${found.block}`, t, { postingTo, offline: Boolean(connectivity?.offline), long }),
     });
     const parsed = parseReply(raw);
     remember(user, parsed.memories);
-    const bubbles = publisher ? await publisher.afterReply(user, parsed.bubbles) : parsed.bubbles;
-    // Anything the app added (post prompts, auto-post results) goes into history too.
-    const added = bubbles.slice(parsed.bubbles.length).map((b) => b.text);
+    // Short and direct: no filler opener, no page-long answers unless they asked for length.
+    const shown = capReply(stripLeadIn(parsed.bubbles), { long });
+    if (found.note) shown.unshift({ type: 'text', text: found.note });
+    const bubbles = publisher ? await publisher.afterReply(user, shown) : shown;
+    // Anything the app added (post prompts, auto-post results) goes into history too, and what is stored is what was shown.
+    const added = bubbles.slice(shown.length).map((b) => b.text);
+    const stored = bubblesToRaw(shown);
     user.messages.push(
       { role: 'user', content: turnText, at: t.toISOString() },
-      { role: 'assistant', content: added.length ? `${raw}\n\n${added.join('\n\n')}` : raw, at: now().toISOString() },
+      { role: 'assistant', content: added.length ? `${stored}\n\n${added.join('\n\n')}` : stored, at: now().toISOString() },
     );
     return bubbles;
   }

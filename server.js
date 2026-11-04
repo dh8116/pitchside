@@ -6,6 +6,7 @@ import { createApp } from './src/app.js';
 import { createCoach } from './src/coach.js';
 import { llmFromEnv, listOllamaModels, pickLocalModel } from './src/llm.js';
 import { createConnectivity } from './src/connectivity.js';
+import { createSearch } from './src/search.js';
 import { COACH_PROMPT_LITE } from './src/prompts.js';
 import { createPublisher, postersFromEnv, parseOwners } from './src/posting/index.js';
 import { createUserStore } from './src/users.js';
@@ -97,6 +98,7 @@ const coach = createCoach({
   channels,
   publisher,
   connectivity,
+  searcher: createSearch({ env }),
   webSearch: env.PITCHSIDE_WEB_SEARCH !== '0',
 });
 

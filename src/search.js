@@ -8,7 +8,7 @@
 // Offline or blocked: the tool answers "search unavailable" and the coach carries on from what it knows.
 
 const UA = 'Mozilla/5.0 (compatible; Pitchside)';
-const OFFLINE = 'Search is unavailable right now (offline or blocked). Say you could not check, and answer from what you already know.';
+export const SEARCH_UNAVAILABLE = 'Search is unavailable right now (offline or blocked). Say you could not check, and answer from what you already know.';
 
 const clean = (s = '') => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
 
@@ -66,6 +66,6 @@ export function createSearch({ env = {}, fetchImpl = fetch, timeoutMs = 8000 } =
   return async function search(query) {
     const q = String(query ?? '').trim().slice(0, 300);
     if (!q) return 'No query given.';
-    try { return format(await run(q)); } catch { return OFFLINE; }
+    try { return format(await run(q)); } catch { return SEARCH_UNAVAILABLE; }
   };
 }

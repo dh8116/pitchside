@@ -24,6 +24,7 @@ export function anthropicLLM(client, { model = 'claude-opus-5' } = {}) {
   return {
     name: `claude (${model})`,
     supportsWebSearch: true,
+    nativeSearch: true,
     async complete({ system, messages, webSearch, signal }) {
       const tools = webSearch ? [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 }] : undefined;
       const convo = [...messages];
@@ -192,6 +193,7 @@ export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch }) {
   return {
     name: `meta (${model})`,
     supportsWebSearch: true,
+    nativeSearch: true,
     async complete({ system, messages, webSearch, signal }) {
       const input = [{ role: 'developer', content: system }, ...messages.map(({ role, content }) => ({ role, content }))];
       for (const withSearch of webSearch && !searchRejected ? [true, false] : [false]) {
@@ -230,6 +232,7 @@ export function chainLLM(providers, { log = console, connectivity = null } = {})
   return {
     name: providers.map((p) => p.name).join(' → '),
     supportsWebSearch: providers[0].supportsWebSearch,
+    nativeSearch: Boolean(providers[0].nativeSearch),
     warm: (system) => Promise.all(providers.filter((p) => p.local && p.warm).map((p) => p.warm(system))),
     async complete(args) {
       const skipCloud = hasLocal && connectivity?.recentlyOffline();

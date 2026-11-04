@@ -710,7 +710,7 @@ test('web status endpoint reports online or offline for the Post buttons', async
 });
 
 test('the short prompt for local models keeps the reply-style rules and special formats of the full one', () => {
-  for (const rule of [/texting/, /blank line/, /<post platform=/, /<remember>/, /\[Pitchside context/, /Day N of 30 with Pitchside/, /under 280/, /under 300/, /offline/, /never invent/i, /no headers, no bold, no emoji/i]) {
+  for (const rule of [/texting/, /blank line/, /<post platform=/, /<remember>/, /\[Pitchside context/, /Day N of 30 with Pitchside/, /under 280/, /under 300/, /web search is unavailable/, /never invent/i, /no headers, no bold, no italics/i, /Start with the answer/, /the first bubble is the decision/i, /under 90 words/, /\[Web results/]) {
     assert.match(COACH_PROMPT_LITE, rule);
   }
   assert.ok(COACH_PROMPT_LITE.length < COACH_PROMPT.length, 'still lighter than the full prompt');
@@ -1208,4 +1208,107 @@ test('local models stream their reply (no five-minute header wait) and a silent 
   const localDown = { name: 'local', local: true, supportsWebSearch: false, complete: async () => { throw networkDown(); } };
   await assert.rejects(chainLLM([cloudDown, localDown], { connectivity: conn, log: { warn() {} } }).complete({}), { code: 'LOCAL_DOWN' });
   await assert.rejects(chainLLM([localDown], { connectivity: conn, log: { warn() {} } }).complete({}), { code: 'LOCAL_DOWN' });
+});
+
+import { capReply, stripLeadIn, wantsLong, bubblesToRaw } from '../src/format.js';
+import { wantsResearch, searchQuery } from '../src/research.js';
+import { contextLine } from '../src/coach.js';
+
+test('style: emphasis marks and filler openers are removed (the asterisks and lead-in from the screenshot)', () => {
+  const raw = `That's a question about capital allocation, which is critical. Before you commit budget, look at the direct benefit.\n\nWhat *specific outcomes* does "batch0" promise that will get Soulor in front of buyers *faster* than the plan?\n\n* guaranteed intros\n* a clear path to pilots`;
+  const { bubbles } = parseReply(raw);
+  const shown = stripLeadIn(bubbles);
+  assert.equal(shown[0].text, 'Before you commit budget, look at the direct benefit.');
+  assert.equal(shown[1].text, 'What specific outcomes does "batch0" promise that will get Soulor in front of buyers faster than the plan?');
+  assert.equal(shown[2].text, '- guaranteed intros\n- a clear path to pilots');
+  assert.doesNotMatch(JSON.stringify(shown), /\*/);
+
+  for (const [input, want] of [['Sure, send it at 8am.', 'Send it at 8am.'], ['Great! Do it today.', 'Do it today.'], ['Got it. Not yet: fix the SPF record.', 'Not yet: fix the SPF record.'], ['Okay, so, no.', 'No.'], ['So far you have 3 demos.', 'So far you have 3 demos.'], ['Perfect timing matters here.', 'Perfect timing matters here.']]) {
+    assert.equal(stripLeadIn([{ type: 'text', text: input }])[0].text, want, input);
+  }
+  assert.deepEqual(stripLeadIn([{ type: 'text', text: 'Sure.' }, { type: 'text', text: 'No.' }]), [{ type: 'text', text: 'No.' }], 'a bubble that was only filler disappears');
+  assert.equal(plainText('use snake_case_names and 2*3*4 and _this_ and *that*'), 'use snake_case_names and 2*3*4 and this and that');
+});
+
+test('length: a reply is capped to a few short bubbles unless the person asked for detail; drafts and a closing question survive', () => {
+  const long = Array.from({ length: 9 }, (_, i) => ({ type: 'text', text: `Bubble ${i + 1} says something useful about the plan and what to do next today.` }));
+  const short = capReply(long);
+  assert.equal(short.length, 4);
+  assert.ok(short.map((b) => b.text).join('').length <= 700);
+  assert.equal(capReply(long, { long: true }).length, 8);
+
+  const huge = [{ type: 'text', text: `${'This sentence is a complete thought. '.repeat(60)}` }];
+  const cut = capReply(huge)[0].text;
+  assert.ok(cut.length <= 700 && cut.endsWith('.'), 'cut at a sentence, not mid-word');
+
+  const withQuestion = [...long, { type: 'text', text: 'Which clinic do you call first?' }];
+  assert.equal(capReply(withQuestion).at(-1).text, 'Which clinic do you call first?', 'the closing question is kept');
+  const post = { type: 'post', platform: 'x', text: 'A draft.\nDay 2 of 30 with Pitchside', link: 'l' };
+  assert.ok(capReply([...long, post]).includes(post), 'post drafts are never cut');
+  const brief = capReply([{ type: 'text', text: 'Verdict: two rivals.' }, { type: 'text', text: `1. Acme: ${'x'.repeat(900)}` }]);
+  assert.ok(brief[1].text.length > 700, 'a research brief gets more room');
+  assert.equal(bubblesToRaw([{ type: 'text', text: 'Hi.' }, post]), 'Hi.\n\n<post platform="x">A draft.\nDay 2 of 30 with Pitchside</post>');
+
+  for (const yes of ['explain how cold email deliverability works', 'give me a step by step plan', 'plan my launch week', 'in detail please']) assert.equal(wantsLong(yes), true, yes);
+  for (const no of ['should I pay to enrol batch0?', 'who should I call', "draft today's post"]) assert.equal(wantsLong(no), false, no);
+  assert.match(contextLine(newUser('k', 'web', 'a')), /reply length: short, 2-4 bubbles, under 90 words/);
+  assert.match(contextLine(newUser('k', 'web', 'a'), new Date(), { long: true }), /reply length: they asked for detail, up to 8 bubbles/);
+});
+
+test('coach: replies are capped and cleaned before they are shown and stored', async () => {
+  const users = await tmpStore();
+  const reply = `Sure, here you go.\n\n${Array.from({ length: 8 }, (_, i) => `Point ${i + 1}: do the *specific* thing today.`).join('\n\n')}`;
+  const coach = createCoach({ llm: { name: 't', complete: async () => reply }, users });
+  const bubbles = await coach.handleInbound({ key: 'web:cap', channel: 'web', address: 'cap', text: 'should I pay to enrol batch0?', deliver: false });
+  assert.equal(bubbles.length, 4);
+  assert.equal(bubbles[0].text, 'Here you go.');
+  assert.doesNotMatch(bubbles.map((b) => b.text).join(' '), /\*/);
+  const stored = (await users.get('web:cap')).messages.at(-1).content;
+  assert.equal(stored.split('\n\n').length, 4, 'history keeps what was shown, so the model does not imitate long replies');
+  const detailed = await coach.handleInbound({ key: 'web:cap2', channel: 'web', address: 'cap2', text: 'explain it step by step', deliver: false });
+  assert.ok(detailed.length > 4);
+});
+
+test('auto search: questions that need the web are searched first; offline or a failed search is stated, not hidden', async () => {
+  const mk = async ({ online = true, found = '1. Acme\nhttps://acme.example\nBooking, $49 a month.', nativeSearch = false } = {}) => {
+    const users = await tmpStore();
+    const calls = [];
+    const searches = [];
+    const llm = { name: 't', nativeSearch, complete: async (a) => { calls.push(a); return 'Verdict: Acme is the rival.'; } };
+    const connectivity = { offline: !online, check: async () => online, markOffline() {}, markOnline() {}, recentlyOffline: () => !online };
+    const coach = createCoach({ llm, users, connectivity, searcher: async (q) => { searches.push(q); return found; } });
+    const ask = (text) => coach.handleInbound({ key: 'web:s', channel: 'web', address: 's', text, deliver: false });
+    return { ask, calls, searches, users };
+  };
+
+  const a = await mk();
+  const bubbles = await a.ask('who are the main competitors to a dental scheduling tool? look it up');
+  assert.deepEqual(a.searches, ['who are the main competitors to a dental scheduling tool']);
+  assert.match(a.calls[0].messages.at(-1).content, /\[Web results for "who are the main competitors to a dental scheduling tool", fetched just now\]\n1\. Acme/);
+  assert.equal(a.calls[0].webSearch, false, 'the model is not asked to search a second time');
+  assert.equal(bubbles[0].text, 'Verdict: Acme is the rival.');
+  assert.equal((await a.users.get('web:s')).messages[0].content, 'who are the main competitors to a dental scheduling tool? look it up', 'history keeps what they typed, not the results');
+
+  await a.ask('hi there');
+  assert.equal(a.searches.length, 1, 'ordinary messages are not searched');
+  assert.equal(a.calls.at(-1).webSearch, true);
+
+  const off = await mk({ online: false });
+  const offBubbles = await off.ask('should I pay to enrol batch0?');
+  assert.equal(off.searches.length, 0);
+  assert.equal(offBubbles[0].text, "I'm offline, so I can't search the web. This is from what I already know.");
+  assert.doesNotMatch(off.calls[0].messages.at(-1).content, /Web results/);
+  assert.equal(off.calls[0].webSearch, false);
+
+  const down = await mk({ found: 'Search is unavailable right now (offline or blocked). Say you could not check, and answer from what you already know.' });
+  assert.match((await down.ask('compare Calendly vs Acuity'))[0].text, /couldn't reach the web just now/);
+
+  const native = await mk({ nativeSearch: true });
+  await native.ask('who are the competitors?');
+  assert.equal(native.searches.length, 0, 'Claude and Meta search by themselves');
+  assert.equal(native.calls[0].webSearch, true);
+
+  assert.equal(wantsResearch('should i pay to enrol batch0?'), true);
+  assert.equal(wantsResearch('Who should I cold email first?'), false);
+  assert.equal(searchQuery('look it up', 'pricing for Calendly'), 'pricing for Calendly');
 });

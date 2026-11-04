@@ -27,6 +27,9 @@ export function plainText(text) {
   return String(text)
     .replace(/^[ \t]*```.*\n?/gm, '')
     .replace(/\*\*(.+?)\*\*|__(.+?)__/g, '$1$2')
+    .replace(/^[ \t]*\*[ \t]+/gm, '- ')
+    .replace(/(^|[\s(])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?=[\s).,!?:;]|$)/g, '$1$2')
+    .replace(/(^|[\s(])_(?![\s_])([^_\n]+?)(?<![\s_])_(?=[\s).,!?:;]|$)/g, '$1$2')
     .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)')
     .replace(/\n{3,}/g, '\n\n')
@@ -99,6 +102,64 @@ export function parseReply(raw) {
   const hasPost = bubbles.some((b) => b.type === 'post');
   return { bubbles: hasPost ? bubbles.filter((b) => !(b.type === 'text' && SIGNATURE_RE.test(b.text.trim()))) : bubbles, memories };
 }
+
+
+// ---- Keeping replies short and direct ----
+
+// "Sure, …", "Great! …", "Got it. …" and "That's a question about X, which matters." say nothing; the answer is what counts.
+const FILLER_RE = /^(?:(?:sure|certainly|absolutely|of course|great|awesome|nice|perfect|got it|okay|ok|alright|understood|well|right|so|good question|great question)(?:\s+(?:thing|then))?[,!.:\u2013\u2014-]+\s*)+/i;
+const META_RE = /^that'?s (?:an?|the) [^.?!]{0,80}\b(?:question|point|concern|decision|topic)\b[^.?!]{0,80}[.?!]\s+/i;
+
+/** Drops filler from the start of the first text bubble (and the bubble itself if nothing is left). */
+export function stripLeadIn(bubbles) {
+  const at = bubbles.findIndex((b) => b.type === 'text');
+  if (at < 0) return bubbles;
+  const cleaned = bubbles[at].text.replace(META_RE, '').replace(FILLER_RE, '').trim();
+  const text = cleaned && cleaned[0].toUpperCase() + cleaned.slice(1);
+  return text ? bubbles.map((b, i) => (i === at ? { ...b, text } : b)) : bubbles.filter((_, i) => i !== at);
+}
+
+/** True when the person deliberately asked for length: detail, a plan, an explanation, a full draft… */
+export const wantsLong = (text) => /\b(?:in detail|detailed|in[- ]depth|thorough(?:ly)?|step[- ]by[- ]step|walk me through|explain|elaborate|full (?:plan|draft|list|breakdown)|complete (?:plan|list)|30[- ]day|playbook|roadmap|outline|essay|longer|everything|plan my|write (?:me )?(?:a|the) (?:plan|doc|email|script|article))\b/i.test(String(text));
+
+function cutAtSentence(text, room) {
+  const head = text.slice(0, room);
+  const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('! '), head.lastIndexOf('? '));
+  if (end >= 40) return head.slice(0, end + 1);
+  const space = head.lastIndexOf(' ');
+  return `${head.slice(0, space > 20 ? space : room).replace(/[,;:\s]+$/, '')}\u2026`;
+}
+
+/**
+ * Keeps a reply from becoming a page: at most 4 bubbles and about 700 characters (8 and 2400 when the person asked
+ * for detail; a research brief gets 1100). Post drafts are never cut here. A closing question always survives.
+ */
+export function capReply(bubbles, { long = false } = {}) {
+  const brief = bubbles.some((b) => b.type === 'text' && /^verdict:/i.test(b.text));
+  const maxBubbles = long ? 8 : 4;
+  const maxChars = long ? 2400 : brief ? 1100 : 700;
+  const texts = bubbles.filter((b) => b.type === 'text');
+  const kept = new Set();
+  let used = 0;
+  let count = 0;
+  const out = [];
+  for (const b of bubbles) {
+    if (b.type !== 'text') { out.push(b); continue; }
+    const room = maxChars - used;
+    if (count >= maxBubbles || (count > 0 && room < 40)) continue;
+    const text = b.text.length > room ? cutAtSentence(b.text, room) : b.text;
+    out.push({ ...b, text });
+    kept.add(b);
+    used += text.length;
+    count += 1;
+  }
+  const last = texts.at(-1);
+  if (last && !kept.has(last) && /\?\s*$/.test(last.text) && last.text.length <= 160) out.push(last);
+  return out;
+}
+
+/** A reply's bubbles back as the raw text the model would have written (what goes into history). */
+export const bubblesToRaw = (bubbles) => bubbles.map((b) => (b.type === 'post' ? `<post platform="${b.platform}">${b.text}</post>` : b.text)).join('\n\n');
 
 const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', threads: 'Threads', bluesky: 'Bluesky' };
 
