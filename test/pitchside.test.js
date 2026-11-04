@@ -917,3 +917,25 @@ test('web import endpoint: validates input, imports, and serves the prompt to pa
     server.close();
   }
 });
+
+import { normalizePost, plainText } from '../src/format.js';
+
+test('drafts from small models are made publishable: markdown out, signature once and last, trimmed to the platform limit', () => {
+  // The real draft that failed to post (342 characters for Bluesky, signature twice).
+  const draft = "Day 1 of 30 with Pitchside\n\nToday, I sent out 3 more targeted cold emails. I also analyzed the main competitors in the dental scheduling space, which are DentalSoft, DentSoftware, NexHealth, Dental Intelligence, Yapi, and Solutionreach.\n\nNext, I'll refine our positioning to highlight our unique value proposition.\n\nDay 1 of 30 with Pitchside";
+  const fixed = normalizePost(draft, 'bluesky');
+  assert.ok([...new Intl.Segmenter().segment(fixed)].length <= 300, `${fixed.length} chars`);
+  assert.equal(fixed.match(/Day 1 of 30 with Pitchside/g).length, 1);
+  assert.ok(fixed.endsWith('Day 1 of 30 with Pitchside'));
+  assert.ok(fixed.startsWith('Today, I sent out 3 more targeted cold emails.'), 'the first line survives');
+  // Through the parser it becomes a card that fits, and the stray signature bubble is gone.
+  const { bubbles } = parseReply(`Here you go:\n<post platform="bluesky">${draft}</post>\n\nDay 2 of 30 with Pitchside.`);
+  assert.deepEqual(bubbles.map((b) => b.type), ['text', 'post']);
+  assert.ok([...new Intl.Segmenter().segment(bubbles[1].text)].length <= 300);
+
+  assert.equal(normalizePost('**Shipped** the export.\n```\n### Next\nShow 5 users', 'x'), 'Shipped the export.\nNext\nShow 5 users');
+  assert.ok([...new Intl.Segmenter().segment(normalizePost('x'.repeat(400), 'x'))].length <= 280, 'one huge line is cut');
+  assert.match(normalizePost('x'.repeat(400), 'x'), /…$/);
+  assert.equal(normalizePost('Short one.\n\nSecond paragraph.', 'linkedin'), 'Short one.\n\nSecond paragraph.', 'LinkedIn keeps its paragraphs');
+  assert.equal(plainText('See [the docs](https://x.dev/a) and **this**'), 'See the docs (https://x.dev/a) and this');
+});
