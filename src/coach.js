@@ -1,12 +1,18 @@
 // The coaching engine: turns an inbound message (from any channel) into reply
 // bubbles, keeps per-person memory, and sends the morning check-ins.
-import { COACH_PROMPT, COACH_PROMPT_LITE, CHECKIN_REQUEST } from './prompts.js';
+import { COACH_PROMPT, COACH_PROMPT_LITE, CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { parseReply, stripContextEcho } from './format.js';
 import { newUser } from './users.js';
 import { KNOWLEDGE } from './knowledge.js';
 import { IMPORT_PROMPT, cleanFacts, fetchPage as fetchPublicPage, htmlToText, readableText } from './import.js';
 
 const MAX_IMPORTS_PER_DAY = 20;
+// Evening nudge when a morning check-in got no reply. Fixed lines, no model call, so it costs nothing and works offline.
+const NUDGES = [
+  'Quick evening check: did you get today\'s outcome done? One line is enough, even "not yet".',
+  'Checking in before the day ends. What got done, and what moves to tomorrow?',
+  'No pressure: where did today land? Tell me in a line and I\'ll set up tomorrow.',
+];
 const SYSTEM = `${COACH_PROMPT}\n\n${KNOWLEDGE}`;
 const MAX_HISTORY = 80;
 const MAX_NOTES = 40;
@@ -58,7 +64,7 @@ export function buildMessages(user, turnText, now = new Date(), opts) {
   return [...history, { role: 'user', content: `${contextLine(user, now, opts)}\n${turnText}` }];
 }
 
-const HELP = `Commands: "timezone Europe/London" sets your clock for check-ins · "pause" stops morning check-ins · "resume" turns them back on · "restart challenge" starts a new 30 days · "reset" forgets this conversation · "notes" lists what I remember about you · "forget 3" removes one note · "import https://…" reads a website into my notes.`;
+const HELP = `Commands: "timezone Europe/London" sets your clock for check-ins · "pause" stops morning check-ins · "resume" turns them back on · "restart challenge" starts a new 30 days · "reset" forgets this conversation · "notes" lists what I remember about you · "forget 3" removes one note · "import https://…" reads a website into my notes · "checkin at 7" sets your morning check-in hour.`;
 
 function handleCommand(user, text, now) {
   const t = text.trim();
@@ -75,6 +81,16 @@ function handleCommand(user, text, now) {
   if (lower === 'reset') { user.messages = []; user.notes = []; user.challengeStartedAt = null; return 'Clean slate. What are you working on?'; }
   if (lower === 'help' || lower === 'commands') return HELP;
   if (lower === 'notes') return user.notes.length ? `What I remember:\n${user.notes.map((n, i) => `${i + 1}. ${n}`).join('\n')}\nSay "forget 2" to remove one.` : "I don't remember anything about you yet.";
+  const ci = lower.match(/^check-?ins?\s+(?:at\s+)?(\d{1,2})(?::00)?\s*(am|pm)?$/);
+  if (ci) {
+    let h = Number(ci[1]);
+    if (ci[2] === 'pm' && h < 12) h += 12;
+    if (ci[2] === 'am' && h === 12) h = 0;
+    if (h > 23) return 'Pick an hour from 0 to 23, like "checkin at 7" or "checkin at 6pm".';
+    user.checkinHour = h;
+    user.checkins = true;
+    return `Done. I'll check in around ${String(h).padStart(2, '0')}:00 your time (${user.timezone}). If that clock is off, set it: "timezone Asia/Singapore".`;
+  }
   const forget = lower.match(/^forget\s+(\d{1,3})$/);
   if (forget) {
     const i = Number(forget[1]) - 1;
@@ -244,7 +260,7 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
       const t = now();
       if (!user || !user.checkins || !user.challengeStartedAt || !channels[user.channel]?.send) return false;
       const local = localParts(user.timezone, t);
-      if (local.hour !== hour || user.lastCheckinDate === local.date) return false;
+      if (local.hour !== (user.checkinHour ?? hour) || user.lastCheckinDate === local.date) return false;
       const day = challengeDay(user, t);
       // WhatsApp only allows free-form business messages within 24h of the
       // person's last message; outside it you'd need an approved template.
@@ -253,16 +269,65 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
       }
       const bubbles = await coachTurn(user, CHECKIN_REQUEST, t, false);
       user.lastCheckinDate = local.date;
+      user.lastCheckinAt = t.toISOString();
       await users.save(user);
       await deliver(user, bubbles);
       return true;
     });
   }
 
+  /**
+   * One gentle evening nudge when this morning's check-in went unanswered. Fixed text, so no model call.
+   * Returns true if sent.
+   */
+  function nudge(key, { hour = 17 } = {}) {
+    return serialize(key, async () => {
+      const user = await loadUser(key);
+      const t = now();
+      if (!user || !user.checkins || !user.lastCheckinAt || !channels[user.channel]?.send) return false;
+      const local = localParts(user.timezone, t);
+      if (local.hour !== hour || user.lastCheckinDate !== local.date || user.lastNudgeDate === local.date) return false;
+      if (t - new Date(user.lastCheckinAt) < 4 * 3_600_000) return false; // give the morning ping time to be answered
+      if (user.lastInboundAt && new Date(user.lastInboundAt) >= new Date(user.lastCheckinAt)) return false; // they replied
+      if (user.channel === 'whatsapp' || user.address?.startsWith?.('whatsapp:')) {
+        if (!user.lastInboundAt || t - new Date(user.lastInboundAt) > 23 * 3_600_000) return false;
+      }
+      const text = NUDGES[Math.floor(Date.parse(local.date) / DAY_MS) % NUDGES.length];
+      const at = t.toISOString();
+      user.messages.push({ role: 'user', content: NUDGE_REQUEST, at }, { role: 'assistant', content: text, at });
+      user.lastNudgeDate = local.date;
+      await users.save(user);
+      await deliver(user, [{ type: 'text', text }]);
+      return true;
+    });
+  }
+
+  /** Publishes posts that were queued while offline, now that we may be back online, and tells the person. */
+  async function flushQueuedPosts() {
+    if (!publisher) return 0;
+    let sent = 0;
+    for await (const person of users.all()) {
+      if (!publisher.hasQueued(person)) continue;
+      try {
+        sent += await serialize(person.key, async () => {
+          const user = await loadUser(person.key);
+          if (!user || !publisher.hasQueued(user)) return 0;
+          const bubbles = await publisher.flushQueued(user);
+          if (!bubbles) return 0;
+          await users.save(user);
+          await deliver(user, bubbles);
+          return 1;
+        });
+      } catch (err) { log.error('queued post failed', person.key, err); }
+    }
+    return sent;
+  }
+
   async function runCheckins(opts) {
     let sent = 0;
     for await (const user of users.all()) {
       try { if (await checkin(user.key, opts)) sent++; } catch (err) { log.error('check-in failed', user.key, err); }
+      try { await nudge(user.key, { hour: opts?.nudgeHour ?? 17 }); } catch (err) { log.error('nudge failed', user.key, err); }
     }
     return sent;
   }
@@ -278,5 +343,5 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
     });
   }
 
-  return { handleInbound, checkin, runCheckins, publishDraft, importContext };
+  return { handleInbound, checkin, nudge, runCheckins, publishDraft, importContext, flushQueuedPosts };
 }

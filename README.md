@@ -60,6 +60,14 @@ Tap **Import** in the web chat (or text `import https://yourproduct.com` from an
 
 Imported text is treated as data, never instructions. A model boils it down to at most 12 short facts, which are cleaned (passwords, keys, emails, phone numbers and "ignore previous instructions" lines are dropped) and shown back to you, numbered. Text `notes` to see everything Pitchside remembers and `forget 3` to remove one. Website imports only fetch public http(s) pages: private, loopback and link-local addresses are refused (checked again on every redirect and at connection time), with a size and time limit. Up to 20 imports a day per person.
 
+### Voice
+- **Voice bar in the web chat.** **Talk** dictates a message, **Read aloud** speaks each reply, and **Call** is a hands-free conversation: it listens, sends, speaks the reply, and listens again until you say goodbye, tap End call, or stay quiet three times. It uses your browser's built-in speech (no account, no cost). Replies are read in the device's own voice, so that works offline; listening is on-device in Safari and Edge, while Chrome needs a connection and says so plainly. The bar hides on browsers with no speech support. Drafts are read as drafts, and links are spoken as site names.
+- **Phone calls.** Call your Twilio number and talk to Pitchside. Twilio does the listening and speaking, so there is nothing extra to set up beyond the number: set its "A call comes in" webhook (HTTP POST) to `{PUBLIC_URL}/webhooks/voice`. A caller is the same person as their SMS/WhatsApp number, so memory and the 30-day challenge carry over, and saying "post it" on a call publishes the waiting draft if that number is in `POST_OWNERS`. Hidden numbers are refused. `TWILIO_VOICE_NAME` (default `Polly.Joanna`) and `TWILIO_VOICE_LANGUAGE` (default `en-US`) pick the voice; `VOICE_CALLS=0` turns calls off.
+
+### Ping
+- **Morning check-in** at your own hour: text `checkin at 7` (or `6pm`). The server default is `CHECKIN_HOUR` (8).
+- **Evening nudge.** If you haven't answered the morning check-in by `NUDGE_HOUR` (default 17, your time), you get one short nudge. It's fixed text, so it costs no model call and works offline. Reply to the check-in, or `pause`, and it stays quiet.
+
 ### Chat history and sessions
 Every conversation is saved on your server (in `DATA_DIR`), so the browser chat restores it on reload. The **Chats** button lists your earlier conversations and reopens any of them; **New** starts a fresh one. On a host that restarts, mount a volume at `DATA_DIR` so history survives.
 
@@ -117,6 +125,7 @@ WhatsApp only allows free-form business messages within 24 hours of the person's
 1. Buy a number (and/or enable the WhatsApp sender or sandbox).
 2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_WHATSAPP_FROM`, and `PUBLIC_URL`.
 3. Set the number's "A message comes in" webhook (HTTP POST) to `{PUBLIC_URL}/webhooks/twilio`.
+4. For phone calls, set the same number's "A call comes in" webhook (HTTP POST) to `{PUBLIC_URL}/webhooks/voice` (see [Voice](#voice)).
 
 Requests are verified with Twilio's `X-Twilio-Signature`, so `PUBLIC_URL` must match exactly what Twilio calls.
 
@@ -148,6 +157,8 @@ How it behaves:
 - **Default:** when an owner gets a draft, Pitchside asks for confirmation. Reply **`post it`** and it publishes, then sends you the link. If it drafted two options, reply **`post 1`** or **`post 2`**. In the browser chat, each post card has a **Post now** button.
 - **`AUTO_POST=1`:** drafts are published the moment they're written. When there are two options for the same platform, it still waits for you to pick one.
 - If posting fails (for example, a duplicate post or an expired token), the draft stays saved and the error is shown, so you can fix it and reply `post it` again.
+- **Posts are made to fit.** A draft is tidied before it's offered: markdown removed, the "Day N" line once and last, and trimmed to the platform's limit (280 for X, 300 for Bluesky) by dropping closing lines first, so a long draft never fails to post.
+- **Offline, posts queue.** If you say `post it` (or `AUTO_POST` fires) with no connection, the post is queued and goes out by itself, with a message to you, as soon as Pitchside is back online. The Post buttons grey out meanwhile.
 - Everyone else just gets the tap-to-post link, as before.
 
 ## Things you can text it
@@ -160,6 +171,9 @@ How it behaves:
 | `restart challenge` | starts a new 30 days today |
 | `reset` | forgets the conversation and notes |
 | `help` | lists these |
+| `checkin at 7` | sets your morning check-in hour |
+| `notes` / `forget 3` | lists what Pitchside remembers about you / removes one |
+| `import https://…` | reads a website into its notes (see [Bring in what you already have](#bring-in-what-you-already-have)) |
 | `post it` / `post 2` | publishes the waiting draft (owners only, see [Auto-posting](#auto-posting)) |
 
 ## How it works

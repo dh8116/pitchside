@@ -7,7 +7,8 @@ import { blueskyPoster } from './bluesky.js';
 import { isNetworkError } from '../connectivity.js';
 
 const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', bluesky: 'Bluesky' };
-const OFFLINE_HELD = "I'm offline right now, so posting is paused. The draft is saved. The Post button works again, and \"post it\" does too, once I'm back online.";
+const OFFLINE_HELD = "I'm offline right now, so posting is paused. The draft is saved. Say \"post it\" and I'll queue it to go out as soon as I'm back online.";
+const OFFLINE_QUEUED = "I'm offline right now, so I've queued it. It goes out the moment I'm back online, and I'll tell you here.";
 const POST_CMD_RE = /^(?:post|publish)\s+(it|them|now|all|\d{1,2})[\s.!]*$/i;
 
 /** Platform clients for whichever credentials are present. */
@@ -43,6 +44,9 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
   // Drafting always works; publishing waits for a connection. No connectivity tracker means always online.
   const isOnline = async () => (connectivity ? connectivity.check() : true);
   const heldBubbles = () => [{ type: 'text', text: OFFLINE_HELD }];
+  // Offline, an explicit "post it" (or auto-post) is queued: the drafts keep a flag and go out by themselves
+  // (see flushQueued) when the connection is back, so nothing has to be asked twice.
+  const queue = (drafts) => { for (const d of drafts) d.queued = true; return [{ type: 'text', text: OFFLINE_QUEUED }]; };
 
   async function publishOne(user, draft) {
     const name = PLATFORM_NAMES[draft.platform];
@@ -55,8 +59,10 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
       log.error(`posting to ${name} failed`, err);
       if (isNetworkError(err)) {
         connectivity?.markOffline();
-        return { type: 'text', text: `Couldn't reach ${name}. ${OFFLINE_HELD}` };
+        draft.queued = true;
+        return { type: 'text', text: `Couldn't reach ${name}. ${OFFLINE_QUEUED}` };
       }
+      draft.queued = false;
       return { type: 'text', text: `Couldn't post to ${name}: ${err.message.slice(0, 200)}. The draft is still saved; reply "post it" to retry.` };
     }
   }
@@ -91,8 +97,9 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
       for (const d of user.pendingPosts) counts[d.platform] = (counts[d.platform] ?? 0) + 1;
       const options = Object.values(counts).some((n) => n > 1);
 
-      // Offline: keep the drafts (and their buttons), publish nothing.
-      if (!(await isOnline())) return [...bubbles, ...heldBubbles()];
+      // Offline: keep the drafts (and their buttons), publish nothing now. With AUTO_POST and one clear
+      // choice, queue it so it still goes out on its own.
+      if (!(await isOnline())) return [...bubbles, ...(autoPost && !options ? queue(user.pendingPosts) : heldBubbles())];
 
       // Auto-post only when the choice is unambiguous: never publish two options.
       if (autoPost && !options) {
@@ -114,7 +121,6 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
       if (!m || !platformsFor(user).length) return null;
       const pending = (user.pendingPosts ?? []).filter((p) => posters[p.platform]);
       if (!pending.length) return [{ type: 'text', text: 'Nothing waiting to post. Ask me for a draft first.' }];
-      if (!(await isOnline())) return heldBubbles();
       let chosen;
       if (/^\d+$/.test(m[1])) {
         chosen = pending[Number(m[1]) - 1];
@@ -126,6 +132,7 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
         }
         chosen = pending;
       }
+      if (!(await isOnline())) return queue(chosen);
       return publishAll(user, chosen, text.trim());
     },
 
@@ -134,8 +141,18 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, c
       if (!platformsFor(user).length) return [{ type: 'text', text: "This chat isn't allowed to post. Add it to POST_OWNERS." }];
       const draft = (user.pendingPosts ?? []).find((p) => p.id === postId && posters[p.platform]);
       if (!draft) return [{ type: 'text', text: 'That draft is no longer waiting. Ask me for a fresh one.' }];
-      if (!(await isOnline())) return heldBubbles();
+      if (!(await isOnline())) return queue([draft]);
       return publishAll(user, [draft], '(tapped "Post now")');
+    },
+
+    /** Whether this person has posts waiting for the connection. */
+    hasQueued: (user) => (user.pendingPosts ?? []).some((p) => p.queued && posters[p.platform]),
+
+    /** Publishes the queued posts if we're online again. Returns the reply bubbles, or null when there was nothing to do. */
+    async flushQueued(user) {
+      const queued = (user.pendingPosts ?? []).filter((p) => p.queued && posters[p.platform]);
+      if (!queued.length || !(await isOnline())) return null;
+      return publishAll(user, queued, '(queued post)');
     },
   };
 }

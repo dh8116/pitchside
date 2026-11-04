@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseReply } from './format.js';
-import { CHECKIN_REQUEST } from './prompts.js';
+import { CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
 import { INTRO_PROMPT } from './import.js';
@@ -175,7 +175,7 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
             return draft ? { ...b, postId: draft.id } : b;
           };
           const messages = (user?.messages ?? [])
-            .filter((m) => m.content !== CHECKIN_REQUEST)
+            .filter((m) => m.content !== CHECKIN_REQUEST && m.content !== NUDGE_REQUEST)
             .map((m) => (m.role === 'user' ? { role: 'user', text: m.content } : { role: 'assistant', bubbles: parseReply(m.content).bubbles.map(withPostIds) }));
           return send(res, 200, { messages });
         }

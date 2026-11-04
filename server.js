@@ -129,9 +129,16 @@ http.createServer(handler).listen(port, () => {
 
 // Morning check-ins: every 10 minutes, message anyone whose local time is the
 // check-in hour and who hasn't had one today.
+// Posts queued while offline go out by themselves once the connection is back.
+if (publisher) {
+  setInterval(() => {
+    coach.flushQueuedPosts().catch((err) => console.error('queued posts failed', err));
+  }, 30_000).unref();
+}
+
 const checkinHour = Number(env.CHECKIN_HOUR ?? 8);
 if (env.CHECKINS !== '0') {
   setInterval(() => {
-    coach.runCheckins({ hour: checkinHour }).catch((err) => console.error('check-ins failed', err));
+    coach.runCheckins({ hour: checkinHour, nudgeHour: Number(env.NUDGE_HOUR ?? 17) }).catch((err) => console.error('check-ins failed', err));
   }, 10 * 60_000).unref();
 }

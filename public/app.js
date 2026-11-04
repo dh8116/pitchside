@@ -15,7 +15,7 @@ const CHIPS = [
 let busy = false;
 let voice = null; // the voice bar, set up at the bottom of this file
 let online = true; // false while the app can't reach the internet: drafts still work, Post buttons grey out
-const OFFLINE_TITLE = "Offline. Posting turns back on when you're online.";
+const OFFLINE_TITLE = 'Offline. Say "post it" to queue it, or wait until you\'re online.';
 const SESSIONS_KEY = 'pitchside.sessions';
 
 function loadId() {

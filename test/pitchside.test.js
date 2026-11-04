@@ -399,13 +399,13 @@ const fakePoster = (name, results = []) => {
   return { posted, name, async post(text) { posted.push(text); const r = results.shift(); if (r instanceof Error) throw r; return { url: `https://${name}/1` }; } };
 };
 
-async function postingCoach({ reply, autoPost = false, owners = ['+1555'], connectivity = null }) {
+async function postingCoach({ reply, autoPost = false, owners = ['+1555'], connectivity = null, channels = {}, xResults = [] }) {
   const users = await tmpStore();
-  const x = fakePoster('x.com');
+  const x = fakePoster('x.com', xResults);
   const bsky = fakePoster('bsky.app');
   const llm = { name: 't', calls: [], complete: async (args) => { llm.calls.push(args); return reply; } };
   const publisher = createPublisher({ posters: { x, bluesky: bsky }, owners, autoPost, connectivity, log: { error() {} } });
-  const coach = createCoach({ llm, users, publisher, connectivity });
+  const coach = createCoach({ llm, users, publisher, connectivity, channels });
   return { users, x, bsky, llm, coach };
 }
 
@@ -1050,6 +1050,127 @@ test('phone calls: the HTTP app routes /webhooks/voice/* to the voice channel, a
     assert.match(await ok.text(), /<Gather/);
     assert.equal((await post('/webhooks/voice', 'bad')).status, 401);
     assert.equal((await post('/webhooks/twilio/extra', 'x')).status, 404, 'channels without handle() have no sub-paths');
+  } finally {
+    server.close();
+  }
+});
+
+import { NUDGE_REQUEST } from '../src/prompts.js';
+
+const toggleConnectivity = (initiallyOnline = false) => {
+  const c = { online: initiallyOnline, get offline() { return !c.online; }, check: async () => c.online, markOffline() { c.online = false; }, markOnline() { c.online = true; }, recentlyOffline: () => !c.online };
+  return c;
+};
+
+test('posts asked for while offline are queued, go out by themselves when the connection is back, and the person is told', async () => {
+  const conn = toggleConnectivity(false);
+  const sms = recordingChannel();
+  const { coach, x, users } = await postingCoach({ reply: 'Try:\n<post platform="x">Day 5</post>', owners: ['+1555'], connectivity: conn, channels: { twilio: sms } });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+
+  await msg('draft my post');
+  assert.match((await msg('post it'))[0].text, /offline right now, so I've queued it/);
+  assert.equal((await users.get('sms:+1555')).pendingPosts[0].queued, true);
+  assert.equal(await coach.flushQueuedPosts(), 0, 'nothing goes out while offline');
+  assert.equal(x.posted.length, 0);
+
+  conn.online = true;
+  assert.equal(await coach.flushQueuedPosts(), 1);
+  assert.deepEqual(x.posted, ['Day 5']);
+  assert.equal(sms.sent.at(-1).bubbles[0].text, 'Posted to X: https://x.com/1', 'the person is told on their channel');
+  assert.deepEqual((await users.get('sms:+1555')).pendingPosts, []);
+  assert.equal(await coach.flushQueuedPosts(), 0, 'and it only goes out once');
+});
+
+test('queued posts: AUTO_POST queues on its own offline; a network failure keeps the post queued; a real error does not', async () => {
+  const conn = toggleConnectivity(false);
+  const auto = await postingCoach({ reply: '<post platform="x">Auto one</post>', autoPost: true, connectivity: conn });
+  const bubbles = await auto.coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text: 'draft', deliver: false });
+  assert.match(bubbles.at(-1).text, /queued/);
+  conn.online = true;
+  assert.equal(await auto.coach.flushQueuedPosts(), 1);
+  assert.deepEqual(auto.x.posted, ['Auto one']);
+
+  const conn2 = toggleConnectivity(true);
+  const flaky = await postingCoach({ reply: '<post platform="x">Flaky</post>', owners: ['+1555'], connectivity: conn2, xResults: [networkDown(), new Error('X says no'), undefined] });
+  const msg = (text) => flaky.coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+  await msg('draft');
+  const first = await msg('post it'); // the network drops mid-post
+  assert.match(first[0].text, /Couldn't reach X\. I'm offline right now, so I've queued it/);
+  assert.equal(conn2.offline, true);
+  assert.equal((await flaky.users.get('sms:+1555')).pendingPosts[0].queued, true);
+  conn2.online = true;
+  await flaky.coach.flushQueuedPosts(); // X rejects it for real this time
+  const stuck = (await flaky.users.get('sms:+1555')).pendingPosts[0];
+  assert.equal(stuck.queued, false, 'a real error is not retried forever');
+  assert.match((await msg('post it'))[0].text, /Posted to X/, 'the founder can still retry by hand');
+});
+
+test('check-in time: "checkin at 7" / "6pm" sets a personal hour, and bad hours are refused', async () => {
+  const users = await tmpStore();
+  let now = new Date('2026-11-03T10:00:00Z');
+  const sms = recordingChannel();
+  const coach = createCoach({ llm: { name: 't', complete: async () => 'ok' }, users, channels: { twilio: sms }, now: () => now });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1', channel: 'twilio', address: '+1', text, deliver: false });
+  await msg('hi');
+  assert.match((await msg('checkin at 7am'))[0].text, /around 07:00 your time \(UTC\)/);
+  assert.match((await msg('check-in 6pm'))[0].text, /around 18:00/);
+  assert.match((await msg('checkin at 25'))[0].text, /Pick an hour/);
+  await msg('checkin 7');
+  now = new Date('2026-11-04T08:05:00Z');
+  assert.equal(await coach.runCheckins({ hour: 8 }), 0, 'the default 8 no longer applies');
+  now = new Date('2026-11-04T07:05:00Z');
+  assert.equal(await coach.runCheckins({ hour: 8 }), 1, 'their own hour does');
+});
+
+test('evening nudge: one fixed line when the morning check-in went unanswered, never otherwise, and hidden from the web history', async () => {
+  const users = await tmpStore();
+  let now = new Date('2026-11-03T10:00:00Z');
+  const sms = recordingChannel();
+  const calls = [];
+  const coach = createCoach({ llm: { name: 't', complete: async (a) => { calls.push(a); return 'Morning. Today: three emails.'; } }, users, channels: { twilio: sms }, now: () => now });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1', channel: 'twilio', address: '+1', text, deliver: false });
+  await msg('hi');
+
+  now = new Date('2026-11-04T08:05:00Z');
+  assert.equal(await coach.runCheckins({ hour: 8 }), 1);
+  const llmCalls = calls.length;
+  now = new Date('2026-11-04T12:05:00Z');
+  await coach.runCheckins({ hour: 8 });
+  assert.equal(sms.sent.length, 1, 'not before the nudge hour');
+  now = new Date('2026-11-04T17:05:00Z');
+  await coach.runCheckins({ hour: 8 });
+  assert.equal(sms.sent.length, 2, 'unanswered check-in gets one nudge');
+  assert.match(sms.sent.at(-1).bubbles[0].text, /evening|Checking in|where did today land/i);
+  assert.equal(calls.length, llmCalls, 'the nudge costs no model call');
+  now = new Date('2026-11-04T17:25:00Z');
+  await coach.runCheckins({ hour: 8 });
+  assert.equal(sms.sent.length, 2, 'only once a day');
+  const stored = await users.get('sms:+1');
+  assert.equal(stored.messages.at(-2).content, NUDGE_REQUEST);
+
+  // They answered the morning check-in: no nudge. They paused check-ins: no nudge.
+  now = new Date('2026-11-05T08:05:00Z');
+  await coach.runCheckins({ hour: 8 });
+  now = new Date('2026-11-05T09:00:00Z');
+  await msg('done, sent 5 emails');
+  const before = sms.sent.length;
+  now = new Date('2026-11-05T17:05:00Z');
+  await coach.runCheckins({ hour: 8 });
+  assert.equal(sms.sent.length, before, 'they replied, so no nudge');
+  await msg('pause');
+  now = new Date('2026-11-06T17:05:00Z');
+  assert.equal(await coach.nudge('sms:+1'), false);
+
+  // The web history never shows the stored marker.
+  const web = { key: 'web:11111111-2222-3333-4444-555555555555', channel: 'web', address: 'x', messages: [
+    { role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }, { role: 'user', content: NUDGE_REQUEST }, { role: 'assistant', content: 'Quick evening check.' }], notes: [], pendingPosts: [], seenIds: [] };
+  await users.save(web);
+  const app = createApp({ coach, users, channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
+  const server = http.createServer(app).listen(0);
+  try {
+    const hist = await (await fetch(`http://127.0.0.1:${server.address().port}/api/web/history?id=11111111-2222-3333-4444-555555555555`)).json();
+    assert.deepEqual(hist.messages.map((m) => m.role), ['user', 'assistant', 'assistant']);
   } finally {
     server.close();
   }

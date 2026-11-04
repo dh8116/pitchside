@@ -85,3 +85,6 @@ Next: let 5 users try it.
 Day 6 of 30 with Pitchside</post>`;
 
 export const CHECKIN_REQUEST = '(No new message from the founder. It is their morning check-in time. Send the morning check-in: one line on yesterday if you know it, then today\'s single most important outcome and when to do it. Keep it to 1–3 bubbles.)';
+
+// Stored in history in place of a model call when the founder never answered the morning check-in (the nudge text is fixed).
+export const NUDGE_REQUEST = '(No reply to this morning\'s check-in. Evening nudge sent.)';
