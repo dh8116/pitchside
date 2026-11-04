@@ -1,8 +1,8 @@
 // Model providers. The coach only needs `complete({ system, messages, webSearch })`
 // returning the reply text, so any provider can sit behind it:
-//   - Claude (Anthropic SDK) — best quality, supports web search
+//   - Meta Model API — Muse Spark / Muse Wonder through Meta's Responses API, with native web search (first choice)
 //   - Gemini / Groq — free tiers via their OpenAI-compatible chat endpoints
-//   - Meta Model API — Muse Spark / Muse Wonder through Meta's Responses API, with native web search
+//   - Anthropic SDK — optional paid provider, supports web search
 //   - Ollama — a local model, no key and no internet needed (searching just reports "unavailable" offline)
 // Several providers can be chained: on a rate limit or outage the next one answers.
 
@@ -60,10 +60,23 @@ export const FREE_PROVIDERS = {
   groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b' },
 };
 
-// Meta Model API (https://dev.meta.ai/docs), OpenAI-compatible chat. Optional; set MODEL_API_KEY (or META_API_KEY).
-// Text models: muse-spark-1.3, muse-spark-1.2, muse-wonder-1.0. The "-contributor" variants are cheaper but Meta may
-// use prompts to improve its products, so they are never the default. Muse Image and SAM 3.1 aren't chat models.
+// Meta Model API (https://dev.meta.ai/docs). Set MODEL_API_KEY (or META_API_KEY).
+// Text models: muse-spark-1.3, muse-spark-1.2, muse-spark-1.1, muse-wonder-1.0. The "-contributor" variants are far
+// cheaper but need permission to use prompts for training, so they are never the default. Muse Image, Muse Voice
+// Transcribe and SAM 3.1 aren't chat models.
 export const META_PROVIDER = { baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3' };
+// Responses API settings (https://dev.meta.ai/docs/reasoning, /docs/search-grounding). Reasoning tokens count against
+// max_output_tokens, so the budget is generous: a low effort keeps a chat reply quick without cutting it short.
+export const META_DEFAULTS = { reasoning: 'low', maxOutputTokens: 4000, searchContext: 'medium' };
+const META_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']); // "none" is rejected by Muse Spark and Wonder
+
+/** Meta's error body is { error: { message, type, param, code } }; this turns a failed response into one Error. */
+export function metaError(status, bodyText, headers) {
+  let e = null;
+  try { e = JSON.parse(bodyText)?.error ?? null; } catch { /* a few endpoints answer in plain text */ }
+  const message = e?.message || String(bodyText).slice(0, 300) || 'no details';
+  return Object.assign(new Error(`meta → ${status}: ${message}`), { status, headers, type: e?.type, code: e?.code, param: e?.param });
+}
 
 const SEARCH_TOOL = {
   type: 'function',
@@ -178,21 +191,38 @@ export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, local = fals
 }
 
 /**
- * Meta Model API (https://dev.meta.ai/docs) through its Responses endpoint, which is the one that carries
- * Meta's built-in web search ("search grounding"). Chat Completions has no search, so it isn't used here.
+ * Meta Model API through its Responses endpoint, the one that carries Meta's built-in web search ("search grounding").
+ * Chat Completions has no search, so it isn't used here. Request and answer shapes follow dev.meta.ai/docs:
+ * input items, reasoning.effort, max_output_tokens, a { type: "web_search" } tool with search_context_size, and
+ * url_citation annotations on the answer.
  */
-export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch }) {
+export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch, reasoning = META_DEFAULTS.reasoning, maxOutputTokens = META_DEFAULTS.maxOutputTokens, searchContext = META_DEFAULTS.searchContext, sleepImpl = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   let searchRejected = false;
+  let effort = META_EFFORTS.has(reasoning) ? reasoning : null;
+  if (effort === 'max' && /contributor/.test(model)) effort = 'xhigh'; // contributor models don't support "max"
+  const messagesOf = (data) => (data.output ?? []).filter((o) => o.type === 'message');
   const textOf = (data) => {
     if (typeof data.output_text === 'string' && data.output_text) return data.output_text;
-    return (data.output ?? []).filter((o) => o.type === 'message')
-      .flatMap((o) => (o.content ?? []).filter((c) => c.type === 'output_text').map((c) => c.text)).join('');
+    return messagesOf(data).flatMap((o) => (o.content ?? []).filter((c) => c.type === 'output_text').map((c) => c.text)).join('');
   };
   const sourcesOf = (data) => {
-    const urls = (data.output ?? []).filter((o) => o.type === 'message')
-      .flatMap((o) => (o.content ?? []).flatMap((c) => (c.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => a.url)));
-    return [...new Set(urls)].slice(0, 3);
+    const urls = messagesOf(data).flatMap((o) => (o.content ?? []).flatMap((c) => (c.annotations ?? []).filter((a) => a.type === 'url_citation').map((a) => a.url)));
+    return [...new Set(urls)].slice(0, 5);
   };
+  // One quick retry when Meta says it is briefly overloaded (503 with a short Retry-After); anything longer is the caller's call.
+  async function send(body, signal) {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/responses`, {
+        method: 'POST',
+        signal,
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const wait = Number(res.headers?.get?.('retry-after'));
+      if (res.status === 503 && attempt === 0 && wait > 0 && wait <= 5) { await sleepImpl(wait * 1000); continue; }
+      return res;
+    }
+  }
   return {
     name: `meta (${model})`,
     keyHint: fingerprint(apiKey),
@@ -201,20 +231,24 @@ export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch }) {
     async complete({ system, messages, webSearch, signal }) {
       const input = [{ role: 'developer', content: system }, ...messages.map(({ role, content }) => ({ role, content }))];
       for (const withSearch of webSearch && !searchRejected ? [true, false] : [false]) {
-        const res = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/responses`, {
-          method: 'POST',
-          signal,
-          headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ model, input, ...(withSearch ? { tools: [{ type: 'web_search' }] } : {}) }),
-        });
+        const res = await send({
+          model,
+          input,
+          max_output_tokens: maxOutputTokens,
+          ...(effort ? { reasoning: { effort } } : {}),
+          ...(withSearch ? { tools: [{ type: 'web_search', search_context_size: searchContext }] } : {}),
+        }, signal);
         if (!res.ok) {
           const body = await res.text().catch(() => '');
           if (withSearch && (res.status === 400 || res.status === 422)) { searchRejected = true; continue; }
-          throw Object.assign(new Error(`meta → ${res.status}: ${body.slice(0, 300)}`), { status: res.status, headers: res.headers });
+          throw metaError(res.status, body, res.headers);
         }
         const data = await res.json();
         const text = textOf(data);
-        if (!text) throw Object.assign(new Error('meta returned no text'), { status: 502 });
+        if (!text) {
+          const out = data.status === 'incomplete' && data.incomplete_details?.reason === 'max_output_tokens';
+          throw Object.assign(new Error(out ? 'meta used its whole output budget on reasoning: raise META_MAX_OUTPUT_TOKENS or lower META_REASONING' : 'meta returned no text'), { status: 502 });
+        }
         const searched = (data.output ?? []).some((o) => o.type === 'web_search_call');
         const sources = searched ? sourcesOf(data) : [];
         return sources.length ? `${text}\n\nSources: ${sources.join(' ')}` : text;
@@ -318,7 +352,10 @@ export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log, connect
   const metaKey = key(env.MODEL_API_KEY) || key(env.META_API_KEY);
   const available = {
     meta: metaKey
-      ? () => metaLLM({ apiKey: metaKey, baseUrl: env.META_API_BASE || META_PROVIDER.baseUrl, model: env.META_MODEL || META_PROVIDER.model, fetchImpl })
+      ? () => metaLLM({
+        apiKey: metaKey, baseUrl: env.META_API_BASE || META_PROVIDER.baseUrl, model: env.META_MODEL || META_PROVIDER.model, fetchImpl,
+        reasoning: env.META_REASONING || undefined, maxOutputTokens: Number(env.META_MAX_OUTPUT_TOKENS) || undefined, searchContext: env.META_SEARCH_CONTEXT || undefined,
+      })
       : null,
     claude: env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN
       ? () => anthropicLLM(createAnthropicClient(), { model: env.PITCHSIDE_MODEL || 'claude-opus-5' })

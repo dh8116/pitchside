@@ -9,7 +9,7 @@ import { parseReply, bubbleToText, bubblesToEmail } from '../src/format.js';
 import { createCoach, challengeDay, buildMessages } from '../src/coach.js';
 import { createUserStore, newUser } from '../src/users.js';
 import { createApp } from '../src/app.js';
-import { anthropicLLM, openaiCompatibleLLM, metaLLM, chainLLM, llmFromEnv, pickLocalModel } from '../src/llm.js';
+import { anthropicLLM, openaiCompatibleLLM, metaLLM, metaError, chainLLM, llmFromEnv, pickLocalModel } from '../src/llm.js';
 import { createConnectivity, isNetworkError } from '../src/connectivity.js';
 import { COACH_PROMPT, COACH_PROMPT_LITE } from '../src/prompts.js';
 import { createSearch, parseDuckDuckGo } from '../src/search.js';
@@ -188,7 +188,9 @@ test('Meta Model API: Responses endpoint with web_search, sources appended, sear
   assert.equal(text, 'Rival raised a round.\n\nSources: https://a.example/x');
   assert.equal(sent[0].url, 'https://api.meta.ai/v1/responses');
   assert.equal(sent[0].auth, 'Bearer k');
-  assert.deepEqual(sent[0].body.tools, [{ type: 'web_search' }]);
+  assert.deepEqual(sent[0].body.tools, [{ type: 'web_search', search_context_size: 'medium' }]);
+  assert.deepEqual(sent[0].body.reasoning, { effort: 'low' });
+  assert.equal(sent[0].body.max_output_tokens, 4000);
   assert.deepEqual(sent[0].body.input, [{ role: 'developer', content: 'SYS' }, { role: 'user', content: 'who is the rival?' }]);
   await llm.complete({ system: 'SYS', webSearch: false, messages: [] });
   assert.equal(sent[1].body.tools, undefined);
@@ -1482,4 +1484,45 @@ test('keys: a token-per-minute limit is explained, and the "keys" command is for
   assert.equal((await ask('web:admin', 'keys'))[0].text, 'Groq: GROQ_API_KEY …1234 · accepted');
   assert.equal((await ask('web:admin', 'check keys'))[0].text, 'Groq: GROQ_API_KEY …1234 · accepted');
   assert.equal((await ask('web:stranger', 'keys'))[0].text, 'Model reply', 'anyone else just talks to the coach; nothing about keys is revealed');
+});
+
+
+test('Meta Responses client: reasoning effort, output budget and search context are settable, with documented limits respected', async () => {
+  const sent = [];
+  const fetchImpl = async (url, init) => { sent.push(JSON.parse(init.body)); return Response.json({ output_text: 'ok' }); };
+  const make = (extra) => metaLLM({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3', fetchImpl, ...extra });
+  await make({ reasoning: 'high', maxOutputTokens: 9000, searchContext: 'high' }).complete({ system: 's', webSearch: true, messages: [] });
+  assert.deepEqual([sent[0].reasoning, sent[0].max_output_tokens, sent[0].tools[0].search_context_size], [{ effort: 'high' }, 9000, 'high']);
+  await make({ reasoning: 'none' }).complete({ system: 's', messages: [] });
+  assert.equal(sent[1].reasoning, undefined, '"none" is rejected by Muse Spark, so it is not sent');
+  await make({ reasoning: 'bogus' }).complete({ system: 's', messages: [] });
+  assert.equal(sent[2].reasoning, undefined);
+  await metaLLM({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1', model: 'muse-spark-1.3-contributor', fetchImpl, reasoning: 'max' }).complete({ system: 's', messages: [] });
+  assert.equal(sent[3].reasoning.effort, 'xhigh', 'contributor models do not support "max"');
+
+  const llm = llmFromEnv({ MODEL_API_KEY: 'm', META_REASONING: 'medium', META_MAX_OUTPUT_TOKENS: '2500', META_SEARCH_CONTEXT: 'low' }, { fetchImpl });
+  await llm.complete({ system: 's', webSearch: true, messages: [{ role: 'user', content: 'hi' }] });
+  assert.deepEqual([sent[4].reasoning.effort, sent[4].max_output_tokens, sent[4].tools[0].search_context_size], ['medium', 2500, 'low']);
+});
+
+test('Meta Responses client: reads Meta error bodies, retries one brief 503, and explains an answer eaten by reasoning', async () => {
+  const waits = [];
+  let n = 0;
+  const flaky = metaLLM({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1', model: 'm', sleepImpl: async (ms) => { waits.push(ms); },
+    fetchImpl: async () => (++n === 1 ? new Response('{"error":{"message":"busy","type":"server_error","code":"service_overloaded"}}', { status: 503, headers: { 'retry-after': '2' } }) : Response.json({ output_text: 'second try' })) });
+  assert.equal(await flaky.complete({ system: 's', messages: [] }), 'second try');
+  assert.deepEqual(waits, [2000]);
+
+  const long = metaLLM({ apiKey: 'k', baseUrl: 'x', model: 'm', sleepImpl: async (ms) => waits.push(ms), fetchImpl: async () => new Response('{"error":{"message":"down"}}', { status: 503, headers: { 'retry-after': '60' } }) });
+  await assert.rejects(long.complete({ system: 's', messages: [] }), { status: 503 });
+  assert.equal(waits.length, 1, 'a long Retry-After is not waited out here');
+
+  const limited = metaLLM({ apiKey: 'k', baseUrl: 'x', model: 'm', fetchImpl: async () => new Response('{"error":{"message":"Rate limit exceeded. Please retry after 15 seconds.","type":"rate_limit_error","code":"rate_limit_exceeded"}}', { status: 429, headers: { 'retry-after': '15' } }) });
+  const err = await limited.complete({ system: 's', messages: [] }).catch((e) => e);
+  assert.deepEqual([err.status, err.type, err.code, err.message], [429, 'rate_limit_error', 'rate_limit_exceeded', 'meta → 429: Rate limit exceeded. Please retry after 15 seconds.']);
+  assert.equal(err.headers.get('retry-after'), '15');
+
+  const eaten = metaLLM({ apiKey: 'k', baseUrl: 'x', model: 'm', fetchImpl: async () => Response.json({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }) });
+  await assert.rejects(eaten.complete({ system: 's', messages: [] }), /raise META_MAX_OUTPUT_TOKENS or lower META_REASONING/);
+  assert.equal(metaError(400, 'plain text body', null).message, 'meta → 400: plain text body');
 });
