@@ -6,7 +6,7 @@ import { CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
 import { INTRO_PROMPT } from './import.js';
-import { DEFAULT_SETUP_URL, rateLimitInfo, rateLimitText } from './limits.js';
+import { DEFAULT_SETUP_URL, PROVIDERS, rateLimitInfo, rateLimitText } from './limits.js';
 
 const IMPORT_SOURCES = new Set(['paste', 'file', 'url']);
 const MAX_IMPORT_TEXT = 300_000; // characters accepted from the browser; the coach keeps the first part
@@ -33,10 +33,14 @@ function send(res, status, body, headers = { 'content-type': 'application/json' 
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
-function friendlyError(err) {
+function friendlyError(err, setupUrl = DEFAULT_SETUP_URL) {
   // Bad keys: 401 on most APIs, 400 "API key not valid" on Gemini, or no status
   // at all when the Anthropic SDK finds no credentials before sending.
-  if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) return 'The model API key is missing or invalid. Check GEMINI_API_KEY / GROQ_API_KEY / MODEL_API_KEY / ANTHROPIC_API_KEY in .env.';
+  if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) {
+    const label = PROVIDERS[err?.provider]?.label;
+    const who = label ? `${label} rejected the key${err.keyHint ? ` ending ${err.keyHint}` : ''}` : 'The model API key is missing or invalid';
+    return `${who}. Check it in .env (a variable set in your shell beats .env), then restart the app: it only reads .env when it starts. A fresh key: ${setupUrl}`;
+  }
   if (err?.code === 'LOCAL_DOWN') return "The local model isn't answering. Check that Ollama is running (`ollama serve`) and that the model is installed. It can also be slow on this machine: try again, or switch to a smaller model like qwen2.5:3b.";
   if (err?.code === 'NO_LOCAL_MODEL' || isNetworkError(err)) return "I can't reach the internet and there's no local model to fall back on. Install Ollama (ollama.com), run `ollama pull qwen2.5:3b`, and I'll use it automatically when offline.";
   return 'Something went wrong on my side. Try again in a moment.';
@@ -49,14 +53,14 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
   /** A failed model call as an HTTP answer. Rate limits carry exactly how long to wait and the buttons to go further. */
   function fail(res, err) {
     const limit = rateLimitInfo(err, { setupUrl });
-    if (!limit) return send(res, 502, { error: friendlyError(err) });
+    if (!limit) return send(res, 502, { error: friendlyError(err, setupUrl) });
     return send(res, 429, { error: limit.message, limit }, { 'content-type': 'application/json', ...(limit.seconds != null ? { 'retry-after': String(limit.seconds) } : {}) });
   }
 
   /** The same, for a channel with no buttons: a message that says how long and where to go. */
   const failureText = (err) => {
     const limit = rateLimitInfo(err, { setupUrl });
-    return limit ? rateLimitText(limit) : friendlyError(err);
+    return limit ? rateLimitText(limit) : friendlyError(err, setupUrl);
   };
 
   function checkPasscode(req) {

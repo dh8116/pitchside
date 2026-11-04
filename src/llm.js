@@ -8,7 +8,8 @@
 
 import { createSearch } from './search.js';
 import { isNetworkError } from './connectivity.js';
-import { retryAfterSeconds } from './limits.js';
+import { limitKind, retryAfterSeconds } from './limits.js';
+import { cleanKey, fingerprint } from './keys.js';
 
 const MAX_PAUSE_CONTINUATIONS = 3;
 
@@ -139,6 +140,7 @@ export function openaiCompatibleLLM({ name, baseUrl, apiKey, model, local = fals
   return {
     name: `${name} (${model})`,
     local,
+    keyHint: fingerprint(apiKey),
     supportsWebSearch: Boolean(search),
     /** Loads the model into memory ahead of the first message (a cold local model takes a while). */
     async warm(system) {
@@ -193,6 +195,7 @@ export function metaLLM({ apiKey, baseUrl, model, fetchImpl = fetch }) {
   };
   return {
     name: `meta (${model})`,
+    keyHint: fingerprint(apiKey),
     supportsWebSearch: true,
     nativeSearch: true,
     async complete({ system, messages, webSearch, signal }) {
@@ -248,7 +251,9 @@ export function chainLLM(providers, { log = console, connectivity = null } = {})
           return text;
         } catch (err) {
           lastErr = err;
-          if (err.status === 429) limits.push({ provider: p.name.split(' ')[0].toLowerCase(), seconds: retryAfterSeconds(err) });
+          const provider = p.name.split(' ')[0].toLowerCase();
+          if (err && typeof err === 'object') { err.provider ??= provider; err.keyHint ??= p.keyHint; } // so the message can say which key was rejected
+          if (err.status === 429) limits.push({ provider, seconds: retryAfterSeconds(err), ...limitKind(err) });
           if (!p.local && isNetworkError(err)) connectivity?.markOffline();
           // The local model not answering says nothing about the internet, so say what is actually wrong.
           if (p.local && isNetworkError(err)) lastErr = Object.assign(new Error('the local model did not answer'), { status: 503, code: 'LOCAL_DOWN', cause: err });
@@ -306,8 +311,11 @@ function autoOllama({ baseUrl, search, fetchImpl }) {
  */
 export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log, connectivity = null, autoLocal = false } = {}) {
   const search = createSearch({ env, fetchImpl });
-  const compat = (name, base, model, apiKey, local = false) => () => openaiCompatibleLLM({ name, baseUrl: base, model, apiKey, local, search, fetchImpl });
-  const metaKey = env.MODEL_API_KEY || env.META_API_KEY;
+  // Replies are capped to a few short bubbles, so asking for 4000 tokens only eats a free tier's per-minute budget.
+  const maxTokens = Number(env.LLM_MAX_TOKENS) || 2000;
+  const compat = (name, base, model, apiKey, local = false) => () => openaiCompatibleLLM({ name, baseUrl: base, model, apiKey, local, search, fetchImpl, ...(local ? {} : { maxTokens }) });
+  const key = (v) => cleanKey(v).key; // pasted quotes, spaces, "Bearer " and NAME= are removed
+  const metaKey = key(env.MODEL_API_KEY) || key(env.META_API_KEY);
   const available = {
     meta: metaKey
       ? () => metaLLM({ apiKey: metaKey, baseUrl: env.META_API_BASE || META_PROVIDER.baseUrl, model: env.META_MODEL || META_PROVIDER.model, fetchImpl })
@@ -315,11 +323,11 @@ export function llmFromEnv(env, { createAnthropicClient, fetchImpl, log, connect
     claude: env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN
       ? () => anthropicLLM(createAnthropicClient(), { model: env.PITCHSIDE_MODEL || 'claude-opus-5' })
       : null,
-    gemini: env.GEMINI_API_KEY ? compat('gemini', FREE_PROVIDERS.gemini.baseUrl, env.GEMINI_MODEL || FREE_PROVIDERS.gemini.model, env.GEMINI_API_KEY) : null,
-    groq: env.GROQ_API_KEY ? compat('groq', FREE_PROVIDERS.groq.baseUrl, env.GROQ_MODEL || FREE_PROVIDERS.groq.model, env.GROQ_API_KEY) : null,
+    gemini: key(env.GEMINI_API_KEY) ? compat('gemini', FREE_PROVIDERS.gemini.baseUrl, env.GEMINI_MODEL || FREE_PROVIDERS.gemini.model, key(env.GEMINI_API_KEY)) : null,
+    groq: key(env.GROQ_API_KEY) ? compat('groq', FREE_PROVIDERS.groq.baseUrl, env.GROQ_MODEL || FREE_PROVIDERS.groq.model, key(env.GROQ_API_KEY)) : null,
     // A model running on this machine: no key, no internet. Searching just reports "unavailable" when offline.
     ollama: env.OLLAMA_MODEL ? compat('ollama', env.OLLAMA_BASE_URL || 'http://localhost:11434/v1', env.OLLAMA_MODEL, 'ollama', true) : null,
-    custom: env.LLM_BASE_URL && env.LLM_MODEL ? compat('custom', env.LLM_BASE_URL, env.LLM_MODEL, env.LLM_API_KEY ?? '') : null,
+    custom: env.LLM_BASE_URL && env.LLM_MODEL ? compat('custom', env.LLM_BASE_URL, env.LLM_MODEL, key(env.LLM_API_KEY)) : null,
   };
   const order = env.LLM_PROVIDERS
     ? env.LLM_PROVIDERS.split(',').map((x) => x.trim().toLowerCase())

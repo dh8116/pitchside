@@ -34,13 +34,29 @@ export function retryAfterSeconds(err) {
   return null;
 }
 
+/** Which budget ran out, read from the provider's message: per-minute tokens, per-minute requests, or the daily allowance. */
+export function limitKind(err) {
+  const msg = String(err?.message ?? '');
+  const limit = Number(msg.match(/Limit (\d+)/i)?.[1]) || null;
+  if (/tokens per minute|\bTPM\b/i.test(msg)) return { kind: 'tokens-per-minute', limit };
+  if (/per day|\bTPD\b|\bRPD\b|daily/i.test(msg)) return { kind: 'daily', limit };
+  if (/requests per minute|\bRPM\b/i.test(msg)) return { kind: 'requests-per-minute', limit };
+  return null;
+}
+
+const DETAIL = {
+  'tokens-per-minute': (limit) => `That is the per-minute token budget${limit ? ` (${limit} tokens)` : ''}. Every message sends the coaching prompt as well, so a few messages in one minute can use it up, even on a brand-new key. Waiting, a model with a bigger budget, or a paid plan fixes it.`,
+  daily: () => 'That is the daily allowance. It resets once a day; a paid plan or another provider gets you going sooner.',
+  'requests-per-minute': () => 'That is the per-minute request limit. It clears in under a minute.',
+};
+
 /**
  * Everything the chat needs to explain a rate limit: who is limited, exactly how long to wait, and the buttons.
  * Returns null when the error is not a rate limit. `err.limits` (set by the provider chain) lists every provider
  * that was limited; the wait shown is the shortest, because that is when the first one answers again.
  */
 export function rateLimitInfo(err, { setupUrl = DEFAULT_SETUP_URL } = {}) {
-  const limits = err?.limits?.length ? err.limits : err?.status === 429 ? [{ provider: err.provider, seconds: retryAfterSeconds(err) }] : null;
+  const limits = err?.limits?.length ? err.limits : err?.status === 429 ? [{ provider: err.provider, seconds: retryAfterSeconds(err), ...limitKind(err) }] : null;
   if (!limits) return null;
   const known = [...new Set(limits.map((l) => l.provider).filter((p) => PROVIDERS[p]))];
   const waits = limits.map((l) => l.seconds).filter(Number.isFinite);
@@ -53,6 +69,7 @@ export function rateLimitInfo(err, { setupUrl = DEFAULT_SETUP_URL } = {}) {
     wait: seconds == null ? null : formatWait(seconds),
     names: who,
     message: seconds == null ? `${who} ${are} rate limited, and didn't say for how long.` : `${who} ${are} rate limited. Try again in ${formatWait(seconds)}.`,
+    detail: (() => { const k = limits.find((l) => DETAIL[l.kind]); return k ? DETAIL[k.kind](k.limit) : null; })(),
     setupUrl,
     topUp: known.map((p) => ({ provider: p, name: PROVIDERS[p].label, url: PROVIDERS[p].topUp })),
   };
@@ -61,5 +78,5 @@ export function rateLimitInfo(err, { setupUrl = DEFAULT_SETUP_URL } = {}) {
 /** The same thing as one plain message, for channels with no buttons (SMS, WhatsApp, email). */
 export function rateLimitText(info) {
   const links = [`add another key: ${info.setupUrl}`, ...info.topUp.map((t) => `top up ${t.name}: ${t.url}`)];
-  return `${info.message} You can ${links.join(' · ')}`;
+  return `${info.message}${info.detail ? ` ${info.detail}` : ''} You can ${links.join(' · ')}`;
 }

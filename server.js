@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { createApp } from './src/app.js';
 import { createCoach } from './src/coach.js';
-import { llmFromEnv, listOllamaModels, pickLocalModel } from './src/llm.js';
+import { readFileSync } from 'node:fs';
+import { llmFromEnv, listOllamaModels, pickLocalModel, FREE_PROVIDERS } from './src/llm.js';
+import { cleanKey, keyProblem, envFileConflicts, probeKey, keyLine } from './src/keys.js';
 import { createConnectivity } from './src/connectivity.js';
 import { createSearch } from './src/search.js';
 import { COACH_PROMPT_LITE } from './src/prompts.js';
-import { createPublisher, postersFromEnv, parseOwners } from './src/posting/index.js';
+import { createPublisher, postersFromEnv, parseOwners, isOwner } from './src/posting/index.js';
 import { createUserStore } from './src/users.js';
 import { whatsappChannel } from './src/channels/whatsapp.js';
 import { twilioChannel } from './src/channels/twilio.js';
@@ -91,6 +93,29 @@ const publisher = Object.keys(posters).length && postOwners.length
   ? createPublisher({ posters, owners: postOwners, autoPost: env.AUTO_POST === '1', connectivity })
   : null;
 
+// Is each model key what you think it is? One line per key: the last four characters the app really loaded, what was
+// cleaned off it (quotes, spaces, "Bearer "), anything that looks wrong, and whether the provider accepts it.
+const KEY_SOURCES = [
+  { provider: 'groq', label: 'Groq', envName: 'GROQ_API_KEY', baseUrl: FREE_PROVIDERS.groq.baseUrl },
+  { provider: 'gemini', label: 'Gemini', envName: 'GEMINI_API_KEY', baseUrl: FREE_PROVIDERS.gemini.baseUrl },
+  { provider: 'meta', label: 'Meta', envName: env.MODEL_API_KEY ? 'MODEL_API_KEY' : 'META_API_KEY' },
+];
+async function checkKeys({ probe = true } = {}) {
+  const lines = [];
+  for (const k of KEY_SOURCES) {
+    if (!env[k.envName]) continue;
+    const { key, fixes } = cleanKey(env[k.envName]);
+    const result = probe && k.baseUrl ? await probeKey({ baseUrl: k.baseUrl, apiKey: key }) : null;
+    lines.push(keyLine({ label: k.label, envName: k.envName, apiKey: key, fixes, problem: keyProblem(k.provider, key), probe: result }));
+  }
+  return lines;
+}
+// The .env file is loaded without overriding anything already set, so a variable in your shell silently beats it.
+function envConflicts() {
+  try { return envFileConflicts(readFileSync(path.resolve('.env'), 'utf8'), env); } catch { return []; }
+}
+const admins = parseOwners(env.ADMINS || env.POST_OWNERS);
+
 const users = createUserStore(path.resolve(env.DATA_DIR ?? path.join(here, 'data')));
 const coach = createCoach({
   llm,
@@ -98,6 +123,8 @@ const coach = createCoach({
   channels,
   publisher,
   connectivity,
+  keysReport: () => checkKeys(),
+  isAdmin: (user) => isOwner(admins, user.key),
   searcher: createSearch({ env }),
   webSearch: env.PITCHSIDE_WEB_SEARCH !== '0',
 });
@@ -118,6 +145,10 @@ http.createServer(handler).listen(port, () => {
   console.log(`Pitchside is running at http://localhost:${port}`);
   console.log(`Model: ${llm.name}`);
   // Load a local model into memory now, so the first message after the internet drops isn't a cold start.
+  for (const c of envConflicts()) {
+    console.warn(`WARNING: ${c.name} is set in your shell or environment${c.envHint ? ` (${c.envHint})` : ''} and differs from .env${c.fileHint ? ` (${c.fileHint})` : ''}. The app uses the shell's value, so the change in .env is ignored. Unset it (e.g. unset ${c.name}) and restart.`);
+  }
+  checkKeys().then((lines) => { for (const l of lines) console.log(`Key check: ${l}`); }).catch(() => {});
   Promise.resolve(llm.warm?.(COACH_PROMPT_LITE)).catch(() => {});
   connectivity.check().then((online) => { if (!online) console.log('Offline: using the local model; posting is paused until the connection is back.'); });
   console.log(`Channels: ${on.length ? on.join(', ') : 'none configured (web chat only)'}`);

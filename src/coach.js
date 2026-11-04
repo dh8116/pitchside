@@ -104,7 +104,7 @@ function handleCommand(user, text, now) {
   return null;
 }
 
-export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, searcher = null, fetchPage = fetchPublicPage, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
+export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, searcher = null, keysReport = null, isAdmin = () => false, fetchPage = fetchPublicPage, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
   const queues = new Map();
 
   async function loadUser(key) {
@@ -258,6 +258,8 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
       let bubbles = publisher ? await publisher.command(user, body) : null;
       const commandReply = bubbles ? null : handleCommand(user, body, t);
       const importUrl = bubbles || commandReply ? null : body.match(/^import\s+(https?:\/\/\S+)$/i)?.[1];
+      // "keys": which model keys the app loaded and whether each is accepted. Only for admins (ADMINS, else POST_OWNERS).
+      const wantsKeys = !bubbles && !commandReply && keysReport && /^(?:check )?keys?$/i.test(body) && isAdmin(user);
       const today = localParts(user.timezone, t).date;
       const turnsToday = user.messages.filter((m) => m.role === 'user' && m.at?.startsWith(today)).length;
 
@@ -265,6 +267,9 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
         // A "post it" reply from the publisher.
       } else if (commandReply) {
         bubbles = [{ type: 'text', text: commandReply }];
+      } else if (wantsKeys) {
+        const lines = await keysReport();
+        bubbles = [{ type: 'text', text: lines.length ? lines.join('\n') : 'No model key is set. Add one in .env (the setup page builds it) and restart the app.' }];
       } else if (importUrl) {
         bubbles = await doImport(user, { source: 'url', url: importUrl }, t);
       } else if (turnsToday >= maxTurnsPerDay) {

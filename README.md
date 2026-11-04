@@ -55,6 +55,13 @@ Free tiers have rate limits, which is fine for one person or a small group.
 ### Short, direct replies
 Pitchside answers first and skips the wind-up: no "Sure" or "That's a question about…", and a decision question gets "Yes.", "No." or "Not yet." with one reason before anything else. A reply is capped at 4 short bubbles (about 700 characters) unless you ask for detail, a plan or an explanation (then up to 8). Drafts are never cut, a closing question is kept, and stray `*emphasis*`, headings and code fences are stripped. In the web chat the bubbles arrive one at a time with typing dots between them (not with reduced-motion settings).
 
+### When a key doesn't work
+At startup Pitchside prints one line per model key: the last four characters it actually loaded, anything it cleaned off (quotes, spaces, `Bearer `, a pasted `NAME=`), a warning if the key doesn't look like that provider's, and whether the provider accepts it:
+```
+Key check: Groq: GROQ_API_KEY …1234 · fixed: removed quote marks · accepted
+```
+It also warns when a variable set in your shell is overriding `.env` (the app never overrides what the environment already sets, so a new key in `.env` is ignored): `unset GROQ_API_KEY`, then restart. Restart after every key change, because `.env` is read only at startup. A rejected key is reported as "Groq rejected the key ending …1234" with the setup link. Text `keys` to an admin account (`ADMINS`, else `POST_OWNERS`, e.g. `ADMINS=web` for the local browser chat) to get the same report on demand. Replies ask for at most `LLM_MAX_TOKENS` (default 2000) so a small free-tier token budget isn't reserved for no reason, and a per-minute token limit is explained as that, since it can trip even on a brand-new key.
+
 ### Rate limits
 When a provider says to slow down, the chat shows exactly how long to wait (read from the provider's own answer, counting down live) and two buttons: **Add another key**, which opens the [.env builder](https://dh8116.github.io/pitchside/setup/) (`SETUP_URL` points it at your own copy), and **Top up** for each limited provider. With several providers set, the wait shown is the shortest, since that is when the first one answers again. Over SMS, WhatsApp or email the same information comes as one message with the links.
 

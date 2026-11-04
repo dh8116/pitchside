@@ -397,10 +397,11 @@ function addLimitCard(limit) {
   $('empty').hidden = true;
   const text = el('p', { className: 'limit-text', textContent: limit.message });
   text.setAttribute('aria-live', 'off'); // it ticks every second; screen readers get the first message only
+  const detail = limit.detail ? el('p', { className: 'limit-detail', textContent: limit.detail }) : null;
   const actions = el('div', { className: 'limit-actions' },
     el('a', { className: 'pill primary', href: limit.setupUrl, target: '_blank', rel: 'noopener', textContent: 'Add another key' }),
     ...limit.topUp.map((t) => el('a', { className: 'pill', href: t.url, target: '_blank', rel: 'noopener', textContent: `Top up ${t.name}` })));
-  const card = el('div', { className: 'msg in limit' }, text, actions);
+  const card = el('div', { className: 'msg in limit' }, text, ...(detail ? [detail] : []), actions);
   $('log').append(card);
   scrollDown();
   if (limit.seconds != null) {

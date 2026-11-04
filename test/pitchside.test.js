@@ -1391,3 +1391,95 @@ test('a failed reply on SMS/WhatsApp is no longer silent: the person is told, wi
     server.close();
   }
 });
+
+import { cleanKey, keyProblem, fingerprint, envFileConflicts, probeKey, keyLine } from '../src/keys.js';
+
+test('keys: what a paste leaves behind is cleaned off, and a key that cannot be right is explained', () => {
+  const real = 'gsk_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL';
+  assert.deepEqual(cleanKey(real), { key: real, fixes: [] });
+  assert.equal(cleanKey(`  ${real}\n`).key, real);
+  assert.equal(cleanKey(`"${real}"`).key, real);
+  assert.equal(cleanKey(`'${real}'`).key, real);
+  assert.equal(cleanKey(`“${real}”`).key, real, 'curly quotes from a word processor');
+  assert.equal(cleanKey(`GROQ_API_KEY=${real}`).key, real, 'the NAME= copied with it');
+  assert.equal(cleanKey(`Bearer ${real}`).key, real);
+  assert.deepEqual(cleanKey(` GROQ_API_KEY="Bearer ${real}" \n`).fixes, ['removed spaces or a line break around it', 'removed the NAME= that was pasted with it', 'removed quote marks', 'removed "Bearer "']);
+  assert.equal(cleanKey(undefined).key, '');
+
+  assert.equal(keyProblem('groq', real), null);
+  assert.match(keyProblem('groq', 'AIzaSyD-wrong-provider-key-000000000000000'), /Groq keys start with gsk_/);
+  assert.match(keyProblem('gemini', 'gsk_abc'), /Gemini keys start with AIza/);
+  assert.match(keyProblem('groq', 'gsk_abc def'), /space or line break in the middle/);
+  assert.match(keyProblem('groq', 'gsk_abc​def'), /not plain text/);
+  assert.match(keyProblem('groq', ''), /empty/);
+  assert.equal(keyProblem('meta', 'anything-goes'), null, 'providers with no known shape are not second-guessed');
+  assert.equal(fingerprint(real), '…IJKL');
+  assert.equal(fingerprint(''), '');
+});
+
+test('keys: a variable in the shell that beats the .env file is spotted (the "I changed the key and nothing changed" case)', () => {
+  const file = '# keys\nGROQ_API_KEY="gsk_newnewnewnewnewnewnewnewnewnew1111"\nGEMINI_API_KEY=AIzaSame0000000000000000000000000000000   # free\nPORT=4000\nexport WEB_CHAT_PASSWORD=hunter2\n';
+  const env = { GROQ_API_KEY: 'gsk_oldoldoldoldoldoldoldoldoldold9999', GEMINI_API_KEY: 'AIzaSame0000000000000000000000000000000', PORT: '3000', WEB_CHAT_PASSWORD: 'hunter2' };
+  assert.deepEqual(envFileConflicts(file, env), [
+    { name: 'GROQ_API_KEY', fileHint: '…1111', envHint: '…9999' },
+    { name: 'PORT' },
+  ], 'same value (even with a comment) is fine; secrets show only the last four characters; plain settings show no values');
+  assert.deepEqual(envFileConflicts(file, {}), [], 'not set in the environment means .env is what the app uses');
+  assert.deepEqual(envFileConflicts('', env), []);
+});
+
+test('keys: asking the provider tells wrong keys from rate limits and outages', async () => {
+  const reply = (status, body = '', headers = {}) => async () => ({ ok: status >= 200 && status < 300, status, headers: new Headers(headers), text: async () => body });
+  const probe = (fetchImpl) => probeKey({ baseUrl: 'https://api.example/v1', apiKey: 'k', fetchImpl });
+  assert.deepEqual(await probe(reply(200)), { status: 'ok' });
+  assert.deepEqual(await probe(reply(401, 'Invalid API Key')), { status: 'rejected', code: 401 });
+  assert.deepEqual(await probe(reply(400, '{"error":{"message":"API key not valid. Please pass a valid API key."}}')), { status: 'rejected', code: 400 });
+  assert.deepEqual(await probe(reply(429, 'Please try again in 6m32.1s')), { status: 'limited', code: 429, seconds: 393 });
+  assert.deepEqual(await probe(reply(503)), { status: 'error', code: 503 });
+  assert.deepEqual(await probe(async () => { throw networkDown(); }), { status: 'unreachable' });
+  let seen;
+  await probe(async (url, init) => { seen = [url, init.headers.authorization]; return { ok: true }; });
+  assert.deepEqual(seen, ['https://api.example/v1/models', 'Bearer k']);
+
+  assert.equal(keyLine({ label: 'Groq', envName: 'GROQ_API_KEY', apiKey: 'gsk_xxxxxxxxxxxxxxxxxxxxxxxx1234', fixes: ['removed quote marks'], probe: { status: 'rejected' } }),
+    'Groq: GROQ_API_KEY …1234 · fixed: removed quote marks · REJECTED by the provider. Wrong, revoked or from a different account: make a new key');
+  assert.match(keyLine({ label: 'Groq', envName: 'GROQ_API_KEY', apiKey: 'k', probe: { status: 'limited', seconds: 90 } }), /accepted, but rate limited for 1m 30s/);
+  assert.match(keyLine({ label: 'Gemini', envName: 'GEMINI_API_KEY', apiKey: 'k', problem: 'it is empty' }), /looks wrong: it is empty/);
+});
+
+test('keys: llmFromEnv cleans pasted keys before sending them, and a rejected key is named in the error', async () => {
+  const sent = [];
+  const fetchImpl = async (url, init) => { sent.push(init.headers.authorization); return { ok: false, status: 401, headers: new Headers(), text: async () => 'Invalid API Key' }; };
+  const llm = llmFromEnv({ GROQ_API_KEY: ' "gsk_abcdefghijklmnopqrstuvwxyz0123456789" \n' }, { fetchImpl, connectivity: createConnectivity({ fetchImpl: async () => ({}) }) });
+  const err = await llm.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] }).catch((e) => e);
+  assert.deepEqual(sent, ['Bearer gsk_abcdefghijklmnopqrstuvwxyz0123456789']);
+  assert.equal(err.provider, 'groq');
+  assert.equal(err.keyHint, '…6789');
+
+  const users = await tmpStore();
+  const app = createApp({ coach: createCoach({ llm, users }), users, channels: {}, publicDir: path.resolve('public'), log: { error() {} }, setupUrl: 'https://me.example/setup' });
+  const server = http.createServer(app).listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/web/chat`, { method: 'POST', body: JSON.stringify({ id: '11111111-2222-3333-4444-555555555555', text: 'hi' }) });
+    assert.equal(res.status, 502);
+    assert.equal((await res.json()).error, 'Groq rejected the key ending …6789. Check it in .env (a variable set in your shell beats .env), then restart the app: it only reads .env when it starts. A fresh key: https://me.example/setup');
+  } finally {
+    server.close();
+  }
+});
+
+test('keys: a token-per-minute limit is explained, and the "keys" command is for admins only', async () => {
+  const tpm = rateLimitInfo(Object.assign(new Error('groq → 429: Rate limit reached for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 5600, Requested 3300. Please try again in 3.75s.'), { status: 429, provider: 'groq' }));
+  assert.equal(tpm.message, 'Groq is rate limited. Try again in 4s.');
+  assert.match(tpm.detail, /per-minute token budget \(8000 tokens\).*even on a brand-new key/);
+  assert.match(rateLimitText(tpm), /even on a brand-new key.*You can add another key/);
+  assert.match(rateLimitInfo(Object.assign(new Error('requests per day (RPD): Limit 1000'), { status: 429, provider: 'groq' })).detail, /daily allowance/);
+  assert.equal(rateLimitInfo(Object.assign(new Error('Rate limited'), { status: 429 })).detail, null);
+
+  const users = await tmpStore();
+  const coach = createCoach({ llm: { name: 't', complete: async () => 'model reply' }, users, keysReport: async () => ['Groq: GROQ_API_KEY …1234 · accepted'], isAdmin: (u) => u.key === 'web:admin' });
+  const ask = (key, text) => coach.handleInbound({ key, channel: 'web', address: key, text, deliver: false });
+  assert.equal((await ask('web:admin', 'keys'))[0].text, 'Groq: GROQ_API_KEY …1234 · accepted');
+  assert.equal((await ask('web:admin', 'check keys'))[0].text, 'Groq: GROQ_API_KEY …1234 · accepted');
+  assert.equal((await ask('web:stranger', 'keys'))[0].text, 'Model reply', 'anyone else just talks to the coach; nothing about keys is revealed');
+});
