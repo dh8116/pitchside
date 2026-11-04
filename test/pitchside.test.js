@@ -1655,3 +1655,24 @@ test('Meta voice: the endpointer ends a recording after speech and a pause, igno
   assert.equal(feed(never, Array(25).fill(0).map(quiet)).at(-1), 'done', 'the time limit ends a recording nobody spoke into');
   assert.ok(rms(frame(0.5)) > 0.3 && rms(new Float32Array(0)) === 0);
 });
+
+test('meta:check walks key, reply, search and voice, and stops early on a rejected key', async () => {
+  const { metaCheck } = await import('../scripts/meta-check.mjs');
+  const lines = [];
+  const seen = [];
+  const fake = async (url, init) => {
+    seen.push(String(url));
+    if (/\/models$/.test(url)) return new Response('{"data":[]}', { status: 200 });
+    if (/\/asr\/transcribe$/.test(url)) return new Response('{"transcript":""}', { status: 200 });
+    return new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello coach.' }] }] }), { status: 200 });
+  };
+  const env = { MODEL_API_KEY: ' "meta_test_key_1234567890" ' };
+  const good = await metaCheck({ env, voice: true, fetchImpl: fake, out: (l) => lines.push(l) });
+  assert.equal(good.ok, true, lines.join('\n'));
+  assert.ok(seen.some((u) => u.endsWith('/asr/transcribe')));
+  assert.ok(lines.every((l) => !l.includes('meta_test_key')), 'never prints the key');
+  const bad = await metaCheck({ env, fetchImpl: async () => new Response('nope', { status: 401 }), out: () => {} });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.results.length, 2);
+  assert.equal((await metaCheck({ env: {}, out: () => {} })).ok, false);
+});
