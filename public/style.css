@@ -142,3 +142,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .import .secondary { padding: 8px 16px; border-radius: 20px; border: 1px solid #c7c7cc; }
 .import details .secondary { margin-top: 8px; }
 .import .primary-btn { padding: 8px 22px; border-radius: 20px; background: var(--sent); color: #fff; font-weight: 600; }
+
+/* Voice bar */
+.voicebar { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; flex-wrap: wrap; }
+.voicebar[hidden] { display: none; }
+.voicebar button { font-size: 14px; padding: 5px 12px; border: 1px solid #c7c7cc; border-radius: 16px; color: var(--green-dark); background: var(--bg); }
+.voicebar button[aria-pressed="true"] { background: var(--green-soft); border-color: var(--sent); font-weight: 600; }
+.voicebar button.live { background: var(--error); border-color: var(--error); color: #fff; font-weight: 600; }
+.v-status { flex: 1 1 100%; min-height: 1.2em; font-size: 13px; color: var(--muted); }
+.v-status.error { color: var(--error); }
+@media (min-width: 520px) { .v-status { flex: 1 1 0; } }

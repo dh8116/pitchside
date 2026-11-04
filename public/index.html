@@ -69,6 +69,12 @@
   </dialog>
 
   <footer class="dock">
+    <div id="voicebar" class="voicebar column" hidden>
+      <button id="v-talk" type="button" aria-pressed="false" title="Dictate a message">Talk</button>
+      <button id="v-read" type="button" aria-pressed="false" title="Read replies out loud">Read aloud</button>
+      <button id="v-call" type="button" title="Hands-free voice call with Pitchside">Call</button>
+      <span id="v-status" class="v-status" role="status" aria-live="polite"></span>
+    </div>
     <form id="form" class="composer column">
       <textarea id="input" rows="1" placeholder="Text Message" aria-label="Message"></textarea>
       <button type="submit" id="send" class="send" aria-label="Send">

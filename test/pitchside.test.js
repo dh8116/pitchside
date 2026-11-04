@@ -939,3 +939,22 @@ test('drafts from small models are made publishable: markdown out, signature onc
   assert.equal(normalizePost('Short one.\n\nSecond paragraph.', 'linkedin'), 'Short one.\n\nSecond paragraph.', 'LinkedIn keeps its paragraphs');
   assert.equal(plainText('See [the docs](https://x.dev/a) and **this**'), 'See the docs (https://x.dev/a) and this');
 });
+
+import { cleanForSpeech, bubblesToSpeech, speechChunks, isGoodbye } from '../public/speech.js';
+
+test('speech: replies are cleaned for the ear: links as site names, no sources clutter, no markdown, drafts introduced as drafts', () => {
+  assert.equal(cleanForSpeech('**Acme**: books online, $49 a month (source: https://www.acme.example/pricing)'), 'Acme: books online, $49 a month');
+  assert.equal(cleanForSpeech('Read https://www.g2.com/products/dentalsoft/alternatives. Then call.'), 'Read g2.com. Then call.');
+  assert.equal(cleanForSpeech('Done.\n\nSources: https://a.example/x https://b.example/y'), 'Done.');
+  const script = bubblesToSpeech([
+    { type: 'text', text: 'Verdict: two real rivals.' },
+    { type: 'post', platform: 'bluesky', text: 'Shipped the export.\nTook 3 hours.\nDay 6 of 30 with Pitchside', link: 'x' },
+  ]);
+  assert.equal(script, 'Verdict: two real rivals.\n\nHere is a draft for Bluesky. Shipped the export. Took 3 hours. Day 6 of 30 with Pitchside');
+  const long = bubblesToSpeech([{ type: 'text', text: `${'A sentence goes here. '.repeat(100)}` }], { maxChars: 200 });
+  assert.ok(long.length < 260 && long.endsWith('The rest is in your chat.'));
+  assert.equal(bubblesToSpeech([]), '');
+  assert.deepEqual(speechChunks('One. Two is a bit longer. Three.\nFour', 20), ['One.', 'Two is a bit longer.', 'Three.', 'Four']);
+  for (const yes of ['goodbye', 'Bye.', "that's all", 'OK, bye bye!', 'end call', 'hang up']) assert.equal(isGoodbye(yes), true, yes);
+  for (const no of ['goodbye to cold emails is a bad idea', 'who should I call?', '']) assert.equal(isGoodbye(no), false, no);
+});

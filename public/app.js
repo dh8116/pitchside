@@ -1,3 +1,5 @@
+import { createVoice, voiceSupport } from './voice.js';
+
 const $ = (id) => document.getElementById(id);
 const STORAGE_KEY = 'pitchside.webId';
 const PASSCODE_KEY = 'pitchside.passcode';
@@ -11,6 +13,7 @@ const CHIPS = [
 ];
 
 let busy = false;
+let voice = null; // the voice bar, set up at the bottom of this file
 let online = true; // false while the app can't reach the internet: drafts still work, Post buttons grey out
 const OFFLINE_TITLE = "Offline. Posting turns back on when you're online.";
 const SESSIONS_KEY = 'pitchside.sessions';
@@ -125,10 +128,12 @@ async function run(request) {
     const { bubbles } = await request();
     dots.remove();
     bubbles.forEach((b) => addMessage('in', b));
+    voice?.onReply(bubbles); // reads it out loud when asked, or keeps a call going
     return bubbles;
   } catch (err) {
     dots.remove();
     addMessage('in', { type: 'text', text: err.message }).classList.add('error');
+    voice?.onFailure('Sorry, that did not go through. Try again.');
     return null;
   } finally {
     setBusy(false);
@@ -336,3 +341,32 @@ $('import-form').onsubmit = async (e) => {
     $('import-go').disabled = false;
   }
 };
+
+// ---- Voice bar: talk, read aloud, hands-free call ----
+function renderVoice(s) {
+  const talking = s.listening && !s.calling;
+  $('v-talk').textContent = talking ? 'Stop' : 'Talk';
+  $('v-talk').setAttribute('aria-pressed', String(talking));
+  $('v-talk').disabled = s.calling || !voiceSupport.listen;
+  $('v-read').setAttribute('aria-pressed', String(s.readAloud));
+  $('v-read').disabled = !voiceSupport.speak;
+  $('v-call').textContent = s.calling ? 'End call' : 'Call';
+  $('v-call').classList.toggle('live', s.calling);
+  $('v-call').disabled = !voiceSupport.listen;
+  $('v-status').textContent = s.error || s.status;
+  $('v-status').classList.toggle('error', Boolean(s.error));
+}
+
+if (voiceSupport.listen || voiceSupport.speak) {
+  $('voicebar').hidden = false;
+  voice = createVoice({
+    send: (text) => send(text),
+    fill: (text) => { $('input').value = text; $('input').style.height = 'auto'; $('input').style.height = `${$('input').scrollHeight}px`; },
+    isBusy: () => busy,
+    onState: renderVoice,
+  });
+  $('v-talk').onclick = () => voice.toggleDictation();
+  $('v-read').onclick = () => voice.toggleReadAloud();
+  $('v-call').onclick = () => voice.toggleCall();
+  renderVoice(voice.state);
+}
