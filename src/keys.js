@@ -62,6 +62,18 @@ export function envFileConflicts(fileText, env) {
   return out;
 }
 
+/**
+ * The model keys worth checking, Meta first. `bases` carries each provider's API base URL (kept in llm.js).
+ * Meta's key variable is MODEL_API_KEY, or META_API_KEY if that is what is set.
+ */
+export function keySources(env, bases) {
+  return [
+    { provider: 'meta', label: 'Meta', envName: env.MODEL_API_KEY ? 'MODEL_API_KEY' : 'META_API_KEY', baseUrl: env.META_API_BASE || bases.meta },
+    { provider: 'groq', label: 'Groq', envName: 'GROQ_API_KEY', baseUrl: bases.groq },
+    { provider: 'gemini', label: 'Gemini', envName: 'GEMINI_API_KEY', baseUrl: bases.gemini },
+  ];
+}
+
 /** Asks a provider whether it accepts this key (a models listing: no tokens used). */
 export async function probeKey({ baseUrl, apiKey, fetchImpl = fetch, timeoutMs = 8000 }) {
   let res;
@@ -73,6 +85,7 @@ export async function probeKey({ baseUrl, apiKey, fetchImpl = fetch, timeoutMs =
   if (res.ok) return { status: 'ok' };
   const body = await res.text().catch(() => '');
   if (res.status === 401 || res.status === 403 || (res.status === 400 && /api[_ ]key/i.test(body))) return { status: 'rejected', code: res.status };
+  if (res.status === 402) return { status: 'billing', code: 402 }; // the key is fine; the account has no billing yet
   if (res.status === 429) return { status: 'limited', code: 429, seconds: retryAfterSeconds({ message: body, headers: res.headers }) };
   return { status: 'error', code: res.status };
 }
@@ -86,6 +99,7 @@ export function keyLine({ label, envName, apiKey, fixes = [], problem = null, pr
     bits.push({
       ok: 'accepted',
       rejected: 'REJECTED by the provider. Wrong, revoked or from a different account: make a new key',
+      billing: 'accepted, but billing is not set up yet: add it in the provider dashboard',
       limited: `accepted, but rate limited${probe.seconds ? ` for ${formatWait(probe.seconds)}` : ''}`,
       unreachable: 'could not reach the provider to check',
       error: `provider answered ${probe.code}`,

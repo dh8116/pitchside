@@ -1394,7 +1394,7 @@ test('a failed reply on SMS/WhatsApp is no longer silent: the person is told, wi
   }
 });
 
-import { cleanKey, keyProblem, fingerprint, envFileConflicts, probeKey, keyLine } from '../src/keys.js';
+import { cleanKey, keyProblem, keySources, fingerprint, envFileConflicts, probeKey, keyLine } from '../src/keys.js';
 
 test('keys: what a paste leaves behind is cleaned off, and a key that cannot be right is explained', () => {
   const real = 'gsk_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL';
@@ -1548,4 +1548,18 @@ test('Meta errors: the 15-second wait is read, the per-team limit is explained, 
   assert.equal((await ask(metaError(402, '{"error":{"message":"no billing","type":"billing_error","code":"billing_not_configured"}}', null))).error,
     "Meta says billing isn't set up (billing_not_configured). Add billing in your Meta dashboard: https://dev.meta.ai/docs/pricing-rate-limits, then ask again.");
   assert.equal((await ask(metaError(504, '{"error":{"message":"gateway timeout","code":"gateway_timeout"}}', null))).error, 'Meta timed out on that one. Try a shorter question, or ask again.');
+});
+
+
+test('key check: Meta is first and is probed at its own base URL; a valid key without billing is called that', async () => {
+  const bases = { meta: 'https://api.meta.ai/v1', groq: 'https://groq.example/v1', gemini: 'https://gemini.example/v1' };
+  assert.deepEqual(keySources({ MODEL_API_KEY: 'm' }, bases).map((k) => [k.provider, k.envName, k.baseUrl]),
+    [['meta', 'MODEL_API_KEY', 'https://api.meta.ai/v1'], ['groq', 'GROQ_API_KEY', 'https://groq.example/v1'], ['gemini', 'GEMINI_API_KEY', 'https://gemini.example/v1']]);
+  assert.equal(keySources({ META_API_KEY: 'm' }, bases)[0].envName, 'META_API_KEY');
+  assert.equal(keySources({ MODEL_API_KEY: 'm', META_API_BASE: 'http://localhost:9/v1' }, bases)[0].baseUrl, 'http://localhost:9/v1');
+
+  const probe = (status) => probeKey({ baseUrl: bases.meta, apiKey: 'k', fetchImpl: async () => ({ ok: status < 300, status, headers: new Headers(), text: async () => '' }) });
+  assert.deepEqual(await probe(402), { status: 'billing', code: 402 });
+  assert.match(keyLine({ label: 'Meta', envName: 'MODEL_API_KEY', apiKey: 'abcd1234', probe: { status: 'billing' } }), /Meta: MODEL_API_KEY …1234 · accepted, but billing is not set up yet/);
+  assert.match(keyLine({ label: 'Meta', envName: 'MODEL_API_KEY', apiKey: 'abcd1234', probe: await probe(401) }), /REJECTED by the provider/);
 });

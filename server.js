@@ -5,8 +5,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createApp } from './src/app.js';
 import { createCoach } from './src/coach.js';
 import { readFileSync } from 'node:fs';
-import { llmFromEnv, listOllamaModels, pickLocalModel, FREE_PROVIDERS } from './src/llm.js';
-import { cleanKey, keyProblem, envFileConflicts, probeKey, keyLine } from './src/keys.js';
+import { llmFromEnv, listOllamaModels, pickLocalModel, FREE_PROVIDERS, META_PROVIDER } from './src/llm.js';
+import { cleanKey, keyProblem, keySources, envFileConflicts, probeKey, keyLine } from './src/keys.js';
 import { createConnectivity } from './src/connectivity.js';
 import { createSearch } from './src/search.js';
 import { COACH_PROMPT_LITE } from './src/prompts.js';
@@ -95,11 +95,7 @@ const publisher = Object.keys(posters).length && postOwners.length
 
 // Is each model key what you think it is? One line per key: the last four characters the app really loaded, what was
 // cleaned off it (quotes, spaces, "Bearer "), anything that looks wrong, and whether the provider accepts it.
-const KEY_SOURCES = [
-  { provider: 'groq', label: 'Groq', envName: 'GROQ_API_KEY', baseUrl: FREE_PROVIDERS.groq.baseUrl },
-  { provider: 'gemini', label: 'Gemini', envName: 'GEMINI_API_KEY', baseUrl: FREE_PROVIDERS.gemini.baseUrl },
-  { provider: 'meta', label: 'Meta', envName: env.MODEL_API_KEY ? 'MODEL_API_KEY' : 'META_API_KEY' },
-];
+const KEY_SOURCES = keySources(env, { meta: META_PROVIDER.baseUrl, groq: FREE_PROVIDERS.groq.baseUrl, gemini: FREE_PROVIDERS.gemini.baseUrl });
 async function checkKeys({ probe = true } = {}) {
   const lines = [];
   for (const k of KEY_SOURCES) {
