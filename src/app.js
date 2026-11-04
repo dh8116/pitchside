@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseReply } from './format.js';
 import { CHECKIN_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
+import { isNetworkError } from './connectivity.js';
 
 const MAX_BODY = 1_000_000;
 const UUID_RE = /^[0-9a-f-]{36}$/;
@@ -32,10 +33,11 @@ function friendlyError(err) {
   // at all when the Anthropic SDK finds no credentials before sending.
   if (err?.status === 401 || /API[_ ]key/i.test(err?.message) || (!err?.status && /authentication method/i.test(err?.message))) return 'The model API key is missing or invalid. Check GEMINI_API_KEY / GROQ_API_KEY / MODEL_API_KEY / ANTHROPIC_API_KEY in .env.';
   if (err?.status === 429) return 'Rate limited by the API. Give it a minute.';
+  if (err?.code === 'NO_LOCAL_MODEL' || isNetworkError(err)) return "I can't reach the internet and there's no local model to fall back on. Install Ollama (ollama.com), run `ollama pull qwen2.5:3b`, and I'll use it automatically when offline.";
   return 'Something went wrong on my side. Try again in a moment.';
 }
 
-export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', log = console, now = () => Date.now() }) {
+export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', connectivity = null, log = console, now = () => Date.now() }) {
   // Wrong-passcode attempts per client address, so the passcode can't be guessed by brute force.
   const failures = new Map();
 
@@ -119,6 +121,10 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
             log.error(err);
             return send(res, 502, { error: friendlyError(err) });
           }
+        }
+        // The chat polls this: while offline its Post buttons grey out, and they come back when this says true.
+        if (req.method === 'GET' && pathname === '/api/web/status') {
+          return send(res, 200, { online: connectivity ? await connectivity.check() : true });
         }
         if (req.method === 'GET' && pathname === '/api/web/history') {
           const id = url.searchParams.get('id');

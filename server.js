@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { createApp } from './src/app.js';
 import { createCoach } from './src/coach.js';
-import { llmFromEnv } from './src/llm.js';
+import { llmFromEnv, listOllamaModels, pickLocalModel } from './src/llm.js';
+import { createConnectivity } from './src/connectivity.js';
+import { COACH_PROMPT_LITE } from './src/prompts.js';
 import { createPublisher, postersFromEnv, parseOwners } from './src/posting/index.js';
 import { createUserStore } from './src/users.js';
 import { whatsappChannel } from './src/channels/whatsapp.js';
@@ -16,14 +18,25 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env;
 const port = Number(env.PORT ?? 3000);
 
-const llm = llmFromEnv(env, { createAnthropicClient: () => new Anthropic() });
+// Online or offline: learned from real traffic, so cloud models give way to a local one and posting pauses.
+const connectivity = createConnectivity({ checkUrls: env.ONLINE_CHECK_URL ? [env.ONLINE_CHECK_URL] : undefined });
+// With a cloud key set, an installed Ollama model quietly backs it up for when the internet drops
+// (OLLAMA_AUTO=0 turns that off). With no keys at all, an installed Ollama model is used on its own.
+const autoLocal = env.OLLAMA_AUTO !== '0';
+const llmOptions = { createAnthropicClient: () => new Anthropic(), connectivity, autoLocal };
+let llm = llmFromEnv(env, llmOptions);
+if (!llm && autoLocal) {
+  const model = pickLocalModel(await listOllamaModels(env.OLLAMA_BASE_URL));
+  if (model) llm = llmFromEnv({ ...env, OLLAMA_MODEL: model }, llmOptions);
+}
 if (!llm) {
   console.error(`No model provider configured. Add one of these to .env (free options first):
   GEMINI_API_KEY     free at https://aistudio.google.com/apikey
   GROQ_API_KEY       free at https://console.groq.com/keys
   MODEL_API_KEY      Meta Model API (Muse Spark / Wonder): https://dev.meta.ai/docs
   OLLAMA_MODEL       a local model, works offline: https://ollama.com
-  ANTHROPIC_API_KEY  paid, best quality, enables web search`);
+  ANTHROPIC_API_KEY  paid, best quality, enables web search
+Or install Ollama and run "ollama pull qwen2.5:3b": it is found and used automatically, even offline.`);
   process.exit(1);
 }
 
@@ -64,7 +77,7 @@ if (env.POSTMARK_SERVER_TOKEN && env.EMAIL_FROM) {
 const posters = postersFromEnv(env);
 const postOwners = parseOwners(env.POST_OWNERS);
 const publisher = Object.keys(posters).length && postOwners.length
-  ? createPublisher({ posters, owners: postOwners, autoPost: env.AUTO_POST === '1' })
+  ? createPublisher({ posters, owners: postOwners, autoPost: env.AUTO_POST === '1', connectivity })
   : null;
 
 const users = createUserStore(path.resolve(env.DATA_DIR ?? path.join(here, 'data')));
@@ -73,6 +86,7 @@ const coach = createCoach({
   users,
   channels,
   publisher,
+  connectivity,
   webSearch: env.PITCHSIDE_WEB_SEARCH !== '0',
 });
 
@@ -83,12 +97,16 @@ const handler = createApp({
   publicDir: path.join(here, 'public'),
   webChat: env.WEB_CHAT !== '0',
   webChatPassword: env.WEB_CHAT_PASSWORD ?? '',
+  connectivity,
 });
 
 http.createServer(handler).listen(port, () => {
   const on = Object.keys(channels);
   console.log(`Pitchside is running at http://localhost:${port}`);
   console.log(`Model: ${llm.name}`);
+  // Load a local model into memory now, so the first message after the internet drops isn't a cold start.
+  Promise.resolve(llm.warm?.(COACH_PROMPT_LITE)).catch(() => {});
+  connectivity.check().then((online) => { if (!online) console.log('Offline: using the local model; posting is paused until the connection is back.'); });
   console.log(`Channels: ${on.length ? on.join(', ') : 'none configured (web chat only)'}`);
   if (env.WEB_CHAT !== '0') {
     console.log(env.WEB_CHAT_PASSWORD

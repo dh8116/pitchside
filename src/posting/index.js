@@ -4,8 +4,10 @@
 import { xPoster } from './x.js';
 import { linkedinPoster } from './linkedin.js';
 import { blueskyPoster } from './bluesky.js';
+import { isNetworkError } from '../connectivity.js';
 
 const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', bluesky: 'Bluesky' };
+const OFFLINE_HELD = "I'm offline right now, so posting is paused. The draft is saved. The Post button works again, and \"post it\" does too, once I'm back online.";
 const POST_CMD_RE = /^(?:post|publish)\s+(it|them|now|all|\d{1,2})[\s.!]*$/i;
 
 /** Platform clients for whichever credentials are present. */
@@ -36,8 +38,11 @@ export function isOwner(owners, key) {
 
 export const parseOwners = (list) => String(list ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
-export function createPublisher({ posters = {}, owners = [], autoPost = false, log = console, now = () => new Date() }) {
+export function createPublisher({ posters = {}, owners = [], autoPost = false, connectivity = null, log = console, now = () => new Date() }) {
   const platformsFor = (user) => (isOwner(owners, user.key) ? Object.keys(posters) : []);
+  // Drafting always works; publishing waits for a connection. No connectivity tracker means always online.
+  const isOnline = async () => (connectivity ? connectivity.check() : true);
+  const heldBubbles = () => [{ type: 'text', text: OFFLINE_HELD }];
 
   async function publishOne(user, draft) {
     const name = PLATFORM_NAMES[draft.platform];
@@ -48,6 +53,10 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, l
       return { type: 'text', text: url ? `Posted to ${name}: ${url}` : `Posted to ${name}.` };
     } catch (err) {
       log.error(`posting to ${name} failed`, err);
+      if (isNetworkError(err)) {
+        connectivity?.markOffline();
+        return { type: 'text', text: `Couldn't reach ${name}. ${OFFLINE_HELD}` };
+      }
       return { type: 'text', text: `Couldn't post to ${name}: ${err.message.slice(0, 200)}. The draft is still saved; reply "post it" to retry.` };
     }
   }
@@ -82,6 +91,9 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, l
       for (const d of user.pendingPosts) counts[d.platform] = (counts[d.platform] ?? 0) + 1;
       const options = Object.values(counts).some((n) => n > 1);
 
+      // Offline: keep the drafts (and their buttons), publish nothing.
+      if (!(await isOnline())) return [...bubbles, ...heldBubbles()];
+
       // Auto-post only when the choice is unambiguous: never publish two options.
       if (autoPost && !options) {
         const results = [];
@@ -102,6 +114,7 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, l
       if (!m || !platformsFor(user).length) return null;
       const pending = (user.pendingPosts ?? []).filter((p) => posters[p.platform]);
       if (!pending.length) return [{ type: 'text', text: 'Nothing waiting to post. Ask me for a draft first.' }];
+      if (!(await isOnline())) return heldBubbles();
       let chosen;
       if (/^\d+$/.test(m[1])) {
         chosen = pending[Number(m[1]) - 1];
@@ -121,6 +134,7 @@ export function createPublisher({ posters = {}, owners = [], autoPost = false, l
       if (!platformsFor(user).length) return [{ type: 'text', text: "This chat isn't allowed to post. Add it to POST_OWNERS." }];
       const draft = (user.pendingPosts ?? []).find((p) => p.id === postId && posters[p.platform]);
       if (!draft) return [{ type: 'text', text: 'That draft is no longer waiting. Ask me for a fresh one.' }];
+      if (!(await isOnline())) return heldBubbles();
       return publishAll(user, [draft], '(tapped "Post now")');
     },
   };

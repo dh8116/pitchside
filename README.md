@@ -46,7 +46,9 @@ Free tiers have rate limits, which is fine for one person or a small group.
 ### Web search and working offline
 - **Meta and Claude search the web natively.** Pitchside turns it on for competitor checks, launch research and pricing questions. `PITCHSIDE_WEB_SEARCH=0` turns it off.
 - **Gemini, Groq and Ollama get a `web_search` tool** that Pitchside runs for them. It uses `BRAVE_API_KEY` or `TAVILY_API_KEY` if set (both have free tiers), otherwise a keyless DuckDuckGo lookup (best effort).
-- **Offline works.** Run Ollama and set `OLLAMA_MODEL`: coaching, memory, check-ins and the browser chat need no internet. Searching just says it's unavailable and the coach answers from what it knows.
+- **Offline works, automatically.** Install [Ollama](https://ollama.com) and run `ollama pull qwen2.5:3b`. With a cloud key set, Pitchside switches to the local model on its own when the internet drops, and back when it returns. With no key at all it uses the local model by itself. No `OLLAMA_MODEL` needed (set it to pick a specific model; `OLLAMA_AUTO=0` turns the automatic fallback off). Coaching, memory, check-ins and the browser chat need no internet. Searching is paused and the coach answers from what it knows.
+- **Local models get a lighter request** so replies come back in seconds on a laptop: a short coaching prompt, recent history only, a capped reply length and one trimmed search round. The model is loaded when the server starts.
+- **Posting waits for a connection.** Drafting keeps working offline and drafts are saved. The Post buttons grey out and "post it" is held until the app is online again, then they work as normal. `ONLINE_CHECK_URL` sets which address is used to check the connection.
 
 ### Chat history and sessions
 Every conversation is saved on your server (in `DATA_DIR`), so the browser chat restores it on reload. The **Chats** button lists your earlier conversations and reopens any of them; **New** starts a fresh one. On a host that restarts, mount a volume at `DATA_DIR` so history survives.

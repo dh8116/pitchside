@@ -101,6 +101,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .btn:hover { background: #e0e0e3; }
 .btn.primary { color: var(--green-dark); font-weight: 600; }
 .btn.done { color: var(--muted); opacity: 1; }
+.btn:disabled:not(.done) { color: var(--muted); opacity: .5; cursor: not-allowed; background: transparent; }
 
 .dock { padding: 8px 0 10px; background: var(--bg); }
 .composer { position: relative; display: flex; align-items: flex-end; }

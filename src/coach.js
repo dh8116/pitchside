@@ -1,6 +1,6 @@
 // The coaching engine: turns an inbound message (from any channel) into reply
 // bubbles, keeps per-person memory, and sends the morning check-ins.
-import { COACH_PROMPT, CHECKIN_REQUEST } from './prompts.js';
+import { COACH_PROMPT, COACH_PROMPT_LITE, CHECKIN_REQUEST } from './prompts.js';
 import { parseReply, stripContextEcho } from './format.js';
 import { newUser } from './users.js';
 import { KNOWLEDGE } from './knowledge.js';
@@ -33,7 +33,7 @@ export function challengeDay(user, now = new Date()) {
   return Math.floor((Date.parse(today) - Date.parse(start)) / DAY_MS) + 1;
 }
 
-export function contextLine(user, now = new Date(), { postingTo = [] } = {}) {
+export function contextLine(user, now = new Date(), { postingTo = [], offline = false } = {}) {
   const t = localParts(user.timezone, now);
   const day = challengeDay(user, now);
   const parts = [
@@ -43,6 +43,7 @@ export function contextLine(user, now = new Date(), { postingTo = [] } = {}) {
     user.notes.length ? `remembered: ${user.notes.join(' | ')}` : 'remembered: nothing yet',
   ];
   if (postingTo.length) parts.push(`app can publish to: ${postingTo.join(', ')}`);
+  if (offline) parts.push('app is offline: no web search right now; draft posts as normal, the app holds them and publishes once it is back online');
   return `[Pitchside context · ${parts.join(' · ')}]`;
 }
 
@@ -74,7 +75,7 @@ function handleCommand(user, text, now) {
   return null;
 }
 
-export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
+export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
   const queues = new Map();
 
   async function loadUser(key) {
@@ -86,7 +87,12 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
   /** Model call + reply parsing shared by inbound turns and check-ins. */
   async function coachTurn(user, turnText, t, search) {
     const postingTo = publisher?.platformsFor(user) ?? [];
-    const raw = await llm.complete({ system: SYSTEM, webSearch: search, messages: buildMessages(user, turnText, t, { postingTo }) });
+    const raw = await llm.complete({
+      system: SYSTEM,
+      systemLite: COACH_PROMPT_LITE,
+      webSearch: search,
+      messages: buildMessages(user, turnText, t, { postingTo, offline: Boolean(connectivity?.offline) }),
+    });
     const parsed = parseReply(raw);
     remember(user, parsed.memories);
     const bubbles = publisher ? await publisher.afterReply(user, parsed.bubbles) : parsed.bubbles;

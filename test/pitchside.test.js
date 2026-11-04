@@ -9,7 +9,8 @@ import { parseReply, bubbleToText, bubblesToEmail } from '../src/format.js';
 import { createCoach, challengeDay, buildMessages } from '../src/coach.js';
 import { createUserStore, newUser } from '../src/users.js';
 import { createApp } from '../src/app.js';
-import { anthropicLLM, openaiCompatibleLLM, metaLLM, chainLLM, llmFromEnv } from '../src/llm.js';
+import { anthropicLLM, openaiCompatibleLLM, metaLLM, chainLLM, llmFromEnv, pickLocalModel } from '../src/llm.js';
+import { createConnectivity, isNetworkError } from '../src/connectivity.js';
 import { createSearch, parseDuckDuckGo } from '../src/search.js';
 import { whatsappChannel } from '../src/channels/whatsapp.js';
 import { twilioChannel, twilioSignature } from '../src/channels/twilio.js';
@@ -397,13 +398,13 @@ const fakePoster = (name, results = []) => {
   return { posted, name, async post(text) { posted.push(text); const r = results.shift(); if (r instanceof Error) throw r; return { url: `https://${name}/1` }; } };
 };
 
-async function postingCoach({ reply, autoPost = false, owners = ['+1555'] }) {
+async function postingCoach({ reply, autoPost = false, owners = ['+1555'], connectivity = null }) {
   const users = await tmpStore();
   const x = fakePoster('x.com');
   const bsky = fakePoster('bsky.app');
   const llm = { name: 't', calls: [], complete: async (args) => { llm.calls.push(args); return reply; } };
-  const publisher = createPublisher({ posters: { x, bluesky: bsky }, owners, autoPost, log: { error() {} } });
-  const coach = createCoach({ llm, users, publisher });
+  const publisher = createPublisher({ posters: { x, bluesky: bsky }, owners, autoPost, connectivity, log: { error() {} } });
+  const coach = createCoach({ llm, users, publisher, connectivity });
   return { users, x, bsky, llm, coach };
 }
 
@@ -540,4 +541,169 @@ test('browser chat passcode: required when set, locks out after repeated wrong g
   } finally {
     server.close();
   }
+});
+
+// ---- Offline: local model fallback, a lighter local request, and posting that waits for the connection ----
+
+const networkDown = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+const clock = () => { const c = { t: 0, now: () => c.t }; return c; };
+
+test('connectivity: network failures are told apart from HTTP errors, and the probe is cached', async () => {
+  assert.equal(isNetworkError(networkDown()), true);
+  assert.equal(isNetworkError(Object.assign(new Error('x'), { status: 503 })), false);
+  assert.equal(isNetworkError(Object.assign(new Error('x'), { name: 'TimeoutError' })), true);
+
+  const c = clock();
+  let probes = 0; let up = false;
+  const conn = createConnectivity({ checkUrls: ['https://a', 'https://b'], now: c.now, ttlMs: 10_000,
+    fetchImpl: async (url) => { probes++; if (!up) throw networkDown(); return { status: 403 }; } }); // any HTTP answer counts as online
+  assert.equal(await conn.check(), false);
+  assert.equal(conn.offline, true);
+  assert.equal(await conn.check(), false);
+  assert.equal(probes, 2, 'two hosts probed once; the second check came from the cache');
+  up = true; c.t = 11_000;
+  assert.equal(await conn.check(), true);
+  conn.markOffline();
+  assert.equal(conn.recentlyOffline(), true);
+  c.t += 11_000;
+  assert.equal(conn.recentlyOffline(), false);
+});
+
+test('chain: when the cloud model is unreachable the local one answers, without web search, and cloud is skipped briefly', async () => {
+  const c = clock();
+  const conn = createConnectivity({ now: c.now, fetchImpl: async () => ({}) });
+  let cloudUp = false; const calls = [];
+  const cloud = { name: 'cloud', supportsWebSearch: true, complete: async (a) => { calls.push(['cloud', a.webSearch]); if (!cloudUp) throw networkDown(); return 'from cloud'; } };
+  const local = { name: 'local', local: true, supportsWebSearch: true, complete: async (a) => { calls.push(['local', a.webSearch]); return 'from local'; } };
+  const llm = chainLLM([cloud, local], { log: { warn() {} }, connectivity: conn });
+
+  assert.equal(await llm.complete({ webSearch: true }), 'from local');
+  assert.equal(conn.offline, true);
+  assert.deepEqual(calls, [['cloud', true], ['local', false]], 'the failed cloud call already marked us offline, so no search for the local model');
+  calls.length = 0;
+
+  assert.equal(await llm.complete({ webSearch: true }), 'from local');
+  assert.deepEqual(calls, [['local', false]], 'cloud skipped while offline, and no search without a connection');
+  calls.length = 0;
+
+  c.t += 11_000; cloudUp = true; // back online: cloud is tried again
+  assert.equal(await llm.complete({ webSearch: true }), 'from cloud');
+  assert.equal(conn.offline, false);
+  assert.deepEqual(calls, [['cloud', true]]);
+});
+
+test('chain: a bad API key still fails loudly instead of quietly switching to the local model', async () => {
+  const conn = createConnectivity({ fetchImpl: async () => ({}) });
+  const badKey = { name: 'cloud', supportsWebSearch: false, complete: async () => { throw Object.assign(new Error('bad key'), { status: 401 }); } };
+  const local = { name: 'local', local: true, supportsWebSearch: false, complete: async () => 'local' };
+  await assert.rejects(chainLLM([badKey, local], { connectivity: conn, log: { warn() {} } }).complete({}), { status: 401 });
+  assert.equal(conn.offline, false);
+});
+
+test('local models get a light request: short prompt, recent history, capped reply, trimmed search results', async () => {
+  const sent = [];
+  const long = 'x'.repeat(5000);
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body); sent.push(body);
+    return { ok: true, json: async () => (sent.length === 1
+      ? { choices: [{ message: { content: '', tool_calls: [{ id: 't1', function: { name: 'web_search', arguments: '{"query":"q"}' } }] } }] }
+      : { choices: [{ message: { content: 'done' } }] }) };
+  };
+  const history = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
+  const make = (local) => openaiCompatibleLLM({ name: 'm', baseUrl: 'http://x/v1', apiKey: 'k', model: 'q', local, search: async () => long, fetchImpl });
+
+  assert.equal(await make(true).complete({ system: 'FULL', systemLite: 'LITE', messages: history, webSearch: true }), 'done');
+  assert.equal(sent[0].messages[0].content, 'LITE');
+  assert.equal(sent[0].max_tokens, 700);
+  assert.ok(sent[0].messages.length <= 15 && sent[0].messages[1].role === 'user');
+  const toolMsg = sent[1].messages.find((m) => m.role === 'tool');
+  assert.equal(toolMsg.content.length, 1200);
+  assert.equal(sent[1].tools, undefined, 'one search round only, then a plain answer');
+
+  sent.length = 0;
+  await make(false).complete({ system: 'FULL', systemLite: 'LITE', messages: history, webSearch: true });
+  assert.equal(sent[0].messages[0].content, 'FULL');
+  assert.equal(sent[0].max_tokens, 4000);
+  assert.equal(sent[0].messages.length, 41);
+});
+
+test('auto local model: found when installed, preferred small and fast, only added behind another provider', async () => {
+  assert.equal(pickLocalModel(['llama3.1:70b', 'qwen2.5:3b', 'nomic-embed-text']), 'qwen2.5:3b');
+  assert.equal(pickLocalModel(['mistral:7b']), 'mistral:7b');
+  assert.equal(pickLocalModel([]), null);
+
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push(url);
+    if (url.endsWith('/api/tags')) return { ok: true, json: async () => ({ models: [{ name: 'qwen2.5:3b' }, { name: 'nomic-embed-text' }] }) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'hi from ollama' } }] }) };
+  };
+  assert.equal(llmFromEnv({}, { autoLocal: true, fetchImpl }), null, 'no cloud provider: server.js detects Ollama itself');
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g' }).name, 'gemini (gemini-2.5-flash)');
+  const llm = llmFromEnv({ GEMINI_API_KEY: 'g' }, { autoLocal: true, fetchImpl, connectivity: createConnectivity({ fetchImpl: async () => ({}) }) });
+  assert.equal(llm.name, 'gemini (gemini-2.5-flash) → ollama (auto)');
+  assert.equal(llmFromEnv({ GEMINI_API_KEY: 'g', LLM_PROVIDERS: 'gemini' }, { autoLocal: true, fetchImpl }).name, 'gemini (gemini-2.5-flash)');
+
+  // Gemini unreachable: the auto-detected local model picks up.
+  const down = async (url, init) => { if (String(url).includes('generativelanguage')) throw networkDown(); return fetchImpl(url, init); };
+  const offline = llmFromEnv({ GEMINI_API_KEY: 'g' }, { autoLocal: true, fetchImpl: down, connectivity: createConnectivity({ fetchImpl: async () => ({}) }) });
+  assert.equal(await offline.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] }), 'hi from ollama');
+  assert.ok(seen.some((u) => u.includes('/api/tags')));
+
+  // Nothing installed: a clear, typed error rather than a hang.
+  const empty = llmFromEnv({ GEMINI_API_KEY: 'g' }, { autoLocal: true, fetchImpl: async (u) => { if (String(u).includes('generativelanguage')) throw networkDown(); throw new Error('refused'); } });
+  await assert.rejects(empty.complete({ system: 's', messages: [{ role: 'user', content: 'hi' }] }), { code: 'NO_LOCAL_MODEL' });
+});
+
+test('posting offline: drafts and buttons stay, nothing is published, and it works again once online', async () => {
+  let online = false;
+  const conn = { get offline() { return !online; }, check: async () => online, markOffline() { online = false; }, markOnline() { online = true; }, recentlyOffline: () => !online };
+  const { coach, x, llm, users } = await postingCoach({ reply: 'Try:\n<post platform="x">Day 4</post>', owners: ['+1555'], autoPost: true, connectivity: conn });
+  const msg = (text) => coach.handleInbound({ key: 'sms:+1555', channel: 'twilio', address: '+1555', text, deliver: false });
+
+  const bubbles = await msg('draft my post');
+  assert.match(llm.calls[0].messages.at(-1).content, /app is offline/);
+  assert.equal(bubbles.find((b) => b.type === 'post').postId, 1, 'the Post button is still there');
+  assert.match(bubbles.at(-1).text, /offline right now/);
+  assert.equal(x.posted.length, 0, 'AUTO_POST publishes nothing while offline');
+  assert.equal((await users.get('sms:+1555')).pendingPosts.length, 1, 'the draft is saved');
+
+  assert.match((await msg('post it'))[0].text, /offline right now/);
+  assert.match((await coach.publishDraft({ key: 'sms:+1555', postId: 1 }))[0].text, /offline right now/);
+  assert.equal(x.posted.length, 0);
+  assert.equal(llm.calls.length, 1, '"post it" never reaches the model');
+
+  online = true;
+  assert.equal((await msg('post it'))[0].text, 'Posted to X: https://x.com/1');
+  assert.deepEqual(x.posted, ['Day 4']);
+});
+
+test('posting: a network failure while publishing marks the app offline and keeps the draft', async () => {
+  const x = fakePoster('x.com', [networkDown()]);
+  let marked = 0;
+  const conn = { offline: false, check: async () => true, markOffline() { marked++; }, markOnline() {}, recentlyOffline: () => false };
+  const publisher = createPublisher({ posters: { x }, owners: ['web'], connectivity: conn, log: { error() {} } });
+  const user = { key: 'web:1', messages: [], pendingPosts: [{ id: 1, platform: 'x', text: 'hi' }] };
+  const [res] = await publisher.publish(user, 1);
+  assert.match(res.text, /Couldn't reach X\. I'm offline/);
+  assert.equal(marked, 1);
+  assert.equal(user.pendingPosts.length, 1);
+});
+
+test('web status endpoint reports online or offline for the Post buttons', async () => {
+  let online = false;
+  const conn = { check: async () => online };
+  const app = createApp({ coach: {}, users: await tmpStore(), channels: {}, publicDir: path.resolve('public'), connectivity: conn, log: { error() {} } });
+  const server = http.createServer(app).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.deepEqual(await (await fetch(`${base}/api/web/status`)).json(), { online: false });
+    online = true;
+    assert.deepEqual(await (await fetch(`${base}/api/web/status`)).json(), { online: true });
+  } finally {
+    server.close();
+  }
+  const plain = createApp({ coach: {}, users: await tmpStore(), channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
+  const s2 = http.createServer(plain).listen(0);
+  try { assert.deepEqual(await (await fetch(`http://127.0.0.1:${s2.address().port}/api/web/status`)).json(), { online: true }); } finally { s2.close(); }
 });

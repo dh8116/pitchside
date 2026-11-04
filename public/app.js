@@ -11,6 +11,8 @@ const CHIPS = [
 ];
 
 let busy = false;
+let online = true; // false while the app can't reach the internet: drafts still work, Post buttons grey out
+const OFFLINE_TITLE = "Offline. Posting turns back on when you're online.";
 const SESSIONS_KEY = 'pitchside.sessions';
 
 function loadId() {
@@ -75,6 +77,8 @@ function postCard(bubble) {
   const footer = el('footer');
   if (bubble.postId) {
     const btn = el('button', { type: 'button', className: 'btn primary', textContent: `Post to ${name}` });
+    btn.dataset.post = '1';
+    if (!online) { btn.disabled = true; btn.title = OFFLINE_TITLE; }
     btn.onclick = () => postNow(bubble.postId, btn);
     footer.append(btn);
   }
@@ -147,8 +151,33 @@ async function postNow(postId, btn) {
   const ok = bubbles?.some((b) => b.text.startsWith('Posted'));
   btn.textContent = ok ? 'Posted' : 'Try again';
   btn.className = ok ? 'btn done' : 'btn primary';
-  btn.disabled = ok;
+  if (ok) btn.dataset.done = '1';
+  btn.disabled = ok || !online;
+  if (!ok) checkOnline(); // a refusal because we're offline should grey the buttons straight away
 }
+
+function applyOnline() {
+  for (const btn of document.querySelectorAll('button[data-post]')) {
+    if (btn.dataset.done) continue;
+    btn.disabled = !online;
+    btn.title = online ? '' : OFFLINE_TITLE;
+  }
+}
+
+async function checkOnline() {
+  let now = navigator.onLine !== false;
+  if (now) {
+    try {
+      const res = await fetch('/api/web/status', { headers: authHeaders() });
+      if (res.ok) now = (await res.json()).online !== false;
+    } catch { now = false; } // can't even reach this server
+  }
+  if (now !== online) { online = now; applyOnline(); }
+}
+setInterval(() => { if (!document.hidden) checkOnline(); }, 8000);
+window.addEventListener('online', checkOnline);
+window.addEventListener('offline', () => { online = false; applyOnline(); });
+checkOnline();
 
 function reset() {
   $('log').replaceChildren();
