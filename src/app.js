@@ -6,7 +6,7 @@ import { CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
 import { INTRO_PROMPT } from './import.js';
-import { DEFAULT_SETUP_URL, PROVIDERS, rateLimitInfo, rateLimitText } from './limits.js';
+import { DEFAULT_SETUP_URL, PROVIDERS, billingInfo, rateLimitInfo, rateLimitText } from './limits.js';
 
 const IMPORT_SOURCES = new Set(['paste', 'file', 'url']);
 const MAX_IMPORT_TEXT = 300_000; // characters accepted from the browser; the coach keeps the first part
@@ -41,6 +41,9 @@ function friendlyError(err, setupUrl = DEFAULT_SETUP_URL) {
     const who = label ? `${label} rejected the key${err.keyHint ? ` ending ${err.keyHint}` : ''}` : 'The model API key is missing or invalid';
     return `${who}. Check it in .env (a variable set in your shell beats .env), then restart the app: it only reads .env when it starts. A fresh key: ${setupUrl}`;
   }
+  const billing = billingInfo(err);
+  if (billing) return `${billing.label} says billing isn't set up${billing.code ? ` (${billing.code})` : ''}. Add billing in your ${billing.label} dashboard${billing.url ? `: ${billing.url}` : ''}, then ask again.`;
+  if (err?.status === 504) return `${PROVIDERS[err.provider]?.label ?? 'The model'} timed out on that one. Try a shorter question, or ask again.`;
   if (err?.code === 'LOCAL_DOWN') return "The local model isn't answering. Check that Ollama is running (`ollama serve`) and that the model is installed. It can also be slow on this machine: try again, or switch to a smaller model like qwen2.5:3b.";
   if (err?.code === 'NO_LOCAL_MODEL' || isNetworkError(err)) return "I can't reach the internet and there's no local model to fall back on. Install Ollama (ollama.com), run `ollama pull qwen2.5:3b`, and I'll use it automatically when offline.";
   return 'Something went wrong on my side. Try again in a moment.';

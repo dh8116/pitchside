@@ -7,7 +7,7 @@ export const DEFAULT_SETUP_URL = 'https://dh8116.github.io/pitchside/setup/';
 export const PROVIDERS = {
   gemini: { label: 'Gemini', topUp: 'https://aistudio.google.com/app/plan_information' },
   groq: { label: 'Groq', topUp: 'https://console.groq.com/settings/billing' },
-  meta: { label: 'Meta', topUp: 'https://dev.meta.ai/docs' },
+  meta: { label: 'Meta', topUp: 'https://dev.meta.ai/docs/pricing-rate-limits' },
   claude: { label: 'Claude', topUp: 'https://console.anthropic.com/settings/billing' },
 };
 
@@ -28,6 +28,9 @@ export function retryAfterSeconds(err) {
   if (groq && (groq[1] || groq[2] || groq[3] || groq[4])) {
     return Math.max(1, Math.ceil((+groq[1] || 0) * 3600 + (+groq[2] || 0) * 60 + (+groq[3] || 0) + (+groq[4] || 0) / 1000));
   }
+  // Meta: "Rate limit exceeded. Please retry after 15 seconds." (the Retry-After header carries the same number).
+  const meta = msg.match(/retry after ([\d.]+) seconds?/i);
+  if (meta) return Math.max(1, Math.ceil(Number(meta[1])));
   // Gemini: "Please retry in 34.2s" or "retryDelay": "34s".
   const gemini = msg.match(/retry in ([\d.]+)s/i) ?? msg.match(/"retryDelay"\s*:\s*"([\d.]+)s"/i);
   if (gemini) return Math.max(1, Math.ceil(Number(gemini[1])));
@@ -50,6 +53,17 @@ const DETAIL = {
   'requests-per-minute': () => 'That is the per-minute request limit. It clears in under a minute.',
 };
 
+// Meta's limits are per team, not per key (https://dev.meta.ai/docs/pricing-rate-limits): 3,000 requests and 4 million
+// tokens a minute on Muse Spark and Wonder, 150 requests a minute on the -contributor models.
+const META_DETAIL = "Meta's limits are per team, not per key: 3,000 requests and 4 million tokens a minute on Muse Spark. If this app is nowhere near that, another app on the same Meta team is using the budget. The -contributor models allow only 150 requests a minute.";
+
+/** A provider saying billing isn't set up (HTTP 402, type billing_error). Returns null for anything else. */
+export function billingInfo(err) {
+  if (err?.status !== 402 && err?.type !== 'billing_error') return null;
+  const p = PROVIDERS[err?.provider];
+  return { label: p?.label ?? 'The model provider', url: p?.topUp ?? null, code: err.code ?? null };
+}
+
 /**
  * Everything the chat needs to explain a rate limit: who is limited, exactly how long to wait, and the buttons.
  * Returns null when the error is not a rate limit. `err.limits` (set by the provider chain) lists every provider
@@ -69,7 +83,7 @@ export function rateLimitInfo(err, { setupUrl = DEFAULT_SETUP_URL } = {}) {
     wait: seconds == null ? null : formatWait(seconds),
     names: who,
     message: seconds == null ? `${who} ${are} rate limited, and didn't say for how long.` : `${who} ${are} rate limited. Try again in ${formatWait(seconds)}.`,
-    detail: (() => { const k = limits.find((l) => DETAIL[l.kind]); return k ? DETAIL[k.kind](k.limit) : null; })(),
+    detail: (() => { const k = limits.find((l) => DETAIL[l.kind]); if (k) return DETAIL[k.kind](k.limit); return limits.some((l) => l.provider === 'meta') ? META_DETAIL : null; })(),
     setupUrl,
     topUp: known.map((p) => ({ provider: p, name: PROVIDERS[p].label, url: PROVIDERS[p].topUp })),
   };

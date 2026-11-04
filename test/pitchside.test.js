@@ -1526,3 +1526,26 @@ test('Meta Responses client: reads Meta error bodies, retries one brief 503, and
   await assert.rejects(eaten.complete({ system: 's', messages: [] }), /raise META_MAX_OUTPUT_TOKENS or lower META_REASONING/);
   assert.equal(metaError(400, 'plain text body', null).message, 'meta → 400: plain text body');
 });
+
+
+test('Meta errors: the 15-second wait is read, the per-team limit is explained, billing and timeouts get plain answers', async () => {
+  assert.equal(retryAfterSeconds(new Error('meta → 429: Rate limit exceeded. Please retry after 15 seconds.')), 15);
+  assert.equal(retryAfterSeconds(new Error('Please retry after 1 second.')), 1);
+  const limited = Object.assign(new Error('meta → 429: Rate limit exceeded. Please retry after 15 seconds.'), { status: 429, provider: 'meta', code: 'rate_limit_exceeded' });
+  const info = rateLimitInfo(limited);
+  assert.equal(info.message, 'Meta is rate limited. Try again in 15s.');
+  assert.match(info.detail, /limits are per team, not per key: 3,000 requests and 4 million tokens a minute/);
+  assert.equal(info.topUp[0].url, 'https://dev.meta.ai/docs/pricing-rate-limits');
+  assert.equal(rateLimitInfo(Object.assign(new Error('x'), { status: 429, provider: 'groq' })).detail, null, 'the per-team note is only for Meta');
+
+  const failing = (err) => ({ name: 'meta (m)', supportsWebSearch: false, complete: async () => { throw err; } });
+  const ask = async (err) => {
+    const users = await tmpStore();
+    const app = createApp({ coach: createCoach({ llm: chainLLM([failing(err)], { connectivity: createConnectivity({ fetchImpl: async () => ({}) }), log: { warn() {} } }), users }), users, channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
+    const server = http.createServer(app).listen(0);
+    try { return await (await fetch(`http://127.0.0.1:${server.address().port}/api/web/chat`, { method: 'POST', body: JSON.stringify({ id: '11111111-2222-3333-4444-555555555555', text: 'hi' }) })).json(); } finally { server.close(); }
+  };
+  assert.equal((await ask(metaError(402, '{"error":{"message":"no billing","type":"billing_error","code":"billing_not_configured"}}', null))).error,
+    "Meta says billing isn't set up (billing_not_configured). Add billing in your Meta dashboard: https://dev.meta.ai/docs/pricing-rate-limits, then ask again.");
+  assert.equal((await ask(metaError(504, '{"error":{"message":"gateway timeout","code":"gateway_timeout"}}', null))).error, 'Meta timed out on that one. Try a shorter question, or ask again.');
+});
