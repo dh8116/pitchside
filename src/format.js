@@ -43,7 +43,26 @@ export function parseReply(raw) {
     last = m.index + m[0].length;
   }
   pushText(text.slice(last));
-  return { bubbles, memories };
+  return { bubbles: bubbles.some((b) => b.type === 'post') ? bubbles : untaggedPost(bubbles, text), memories };
+}
+
+// Smaller local models often write the draft but forget the <post> tag. A multi-line bubble that ends with
+// the challenge signature line is a draft all the same, so it becomes a post card (the platform is the first
+// one the reply names, else X). A bubble holding only the signature line, repeated afterwards, is dropped.
+const SIGNATURE_RE = /^day\s+\d+(?:\s+of\s+30)?\s+with\s+pitchside[.!]?$/i;
+const PLATFORM_WORD_RE = /\b(bluesky|linkedin|threads)\b/i;
+
+function untaggedPost(bubbles, text) {
+  const at = bubbles.findIndex((b) => {
+    const lines = b.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    return lines.length >= 2 && SIGNATURE_RE.test(lines.at(-1));
+  });
+  if (at < 0) return bubbles;
+  const platform = (text.match(PLATFORM_WORD_RE)?.[1] ?? 'x').toLowerCase();
+  const body = bubbles[at].text.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+  return bubbles
+    .map((b, i) => (i === at ? { type: 'post', platform, text: body, link: shareLink(platform, body) } : b))
+    .filter((b, i) => !(i > at && b.type === 'text' && SIGNATURE_RE.test(b.text.trim())));
 }
 
 const PLATFORM_NAMES = { x: 'X', linkedin: 'LinkedIn', threads: 'Threads', bluesky: 'Bluesky' };

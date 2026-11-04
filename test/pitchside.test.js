@@ -715,3 +715,19 @@ test('the short prompt for local models keeps the reply-style rules and special 
   }
   assert.ok(COACH_PROMPT_LITE.length < COACH_PROMPT.length, 'still lighter than the full prompt');
 });
+
+test('a draft without <post> tags still becomes a post card when it ends with the Day N signature', () => {
+  const raw = "Sure, here's a post for Bluesky:\n\nShipped the demo today.\nBooked 3 calls.\nDay 4 of 30 with Pitchside\n\nTweak it to fit your voice.\n\nDay 4 of 30 with Pitchside";
+  const { bubbles } = parseReply(raw);
+  assert.deepEqual(bubbles.map((b) => b.type), ['text', 'post', 'text']);
+  assert.equal(bubbles[1].platform, 'bluesky');
+  assert.equal(bubbles[1].text, 'Shipped the demo today.\nBooked 3 calls.\nDay 4 of 30 with Pitchside');
+  assert.match(bubbles[1].link, /bsky\.app\/intent\/compose/);
+
+  assert.equal(parseReply('A draft:\nOne line.\nDay 2 with Pitchside').bubbles.find((b) => b.type === 'post').platform, 'x');
+  // Not a post: no signature, a lone signature line, or a tagged post already present.
+  assert.equal(parseReply('You are on day 3. Keep going.\n\nTwo lines\nof advice.').bubbles.some((b) => b.type === 'post'), false);
+  assert.equal(parseReply('Day 3 of 30 with Pitchside').bubbles.some((b) => b.type === 'post'), false);
+  const tagged = parseReply('Here:\n<post platform="x">Hi\nDay 1 of 30 with Pitchside</post>\n\nOther\nDay 1 of 30 with Pitchside').bubbles;
+  assert.equal(tagged.filter((b) => b.type === 'post').length, 1);
+});
