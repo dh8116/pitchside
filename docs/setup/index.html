@@ -111,7 +111,9 @@
     .privacy { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
     .privacy svg { flex: none; color: var(--accent); }
     footer.foot { color: var(--muted); font-size: 13px; padding: 0 0 40px; }
-  </style>
+  .remember { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+.remember .saved { flex: 1 1 200px; min-width: 0; }
+</style>
 </head>
 <body>
   <div class="wrap">
@@ -138,6 +140,11 @@
           <label class="toggle"><input type="checkbox" id="show"> Show values</label>
           <label class="toggle"><input type="checkbox" id="only-filled"> Only filled lines in output</label>
         </div>
+        <div class="remember">
+          <button class="btn small primary" type="button" id="save">Save on this device</button>
+          <button class="btn small" type="button" id="forget">Forget saved</button>
+          <span class="saved" id="saved" role="status" aria-live="polite"></span>
+        </div>
         <div class="notice" id="notice" hidden></div>
         <div id="form"></div>
       </div>
@@ -156,7 +163,7 @@
         <pre id="output"></pre>
         <div class="privacy">
           <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm-1 14-4-4 1.4-1.4L11 13.2l4.6-4.6L17 10l-6 6Z"/></svg>
-          <span>No uploads, no analytics, nothing saved. The page's security policy blocks every network request except fetching a public <code>.env.example</code> from GitHub. Values disappear when you close the tab.</span>
+          <span>No uploads, no analytics. The page's security policy blocks every network request except fetching a public <code>.env.example</code> from GitHub. Nothing is saved unless you tap <b>Save on this device</b>. Then it is kept in this browser only, for each repo: plain values as they are, secrets (keys, tokens, passwords) encrypted with a key that never leaves this browser, so the saved copy is useless anywhere else. <b>Forget saved</b> removes everything.</span>
         </div>
       </aside>
     </main>
@@ -452,6 +459,7 @@ function renderForm() {
         field.classList.toggle('filled', Boolean(val));
         updateTally();
         renderOutput();
+        markUnsaved();
       };
       row.append(input);
       if (canGenerate(v, preset)) {
@@ -493,13 +501,16 @@ function resolveSource(input) {
 
 function setMsg(text, error = false) { $('msg').textContent = text; $('msg').className = `msg${error ? ' error' : ''}`; }
 
-function useText(text, repo, origin) {
+async function useText(text, repo, origin) {
   const parsed = parseEnvExample(text);
   if (!parsed.vars.length) throw new Error('No variables found. Is that really a .env.example?');
   model = { ...parsed, repo };
   values.clear();
+  const { n, lost } = await restore(repo || 'pasted');
+  dirty = false;
   renderForm();
   setMsg(`Loaded ${parsed.vars.length} variables from ${origin}.`);
+  setSaved(n || lost ? `Restored ${n} saved ${n === 1 ? 'entry' : 'entries'} from this device.${lost ? ` ${lost} secret${lost === 1 ? '' : 's'} could not be unlocked here and ${lost === 1 ? 'was' : 'were'} skipped.` : ''}` : '');
   $('notice').hidden = true;
 }
 
@@ -510,7 +521,7 @@ async function load(input) {
   try {
     const res = await fetch(src.url, { credentials: 'omit', cache: 'no-store' });
     if (!res.ok) throw new Error(res.status === 404 ? `No file at ${src.url}. Check the repo is public, and the branch and path.` : `GitHub returned ${res.status}.`);
-    useText(await res.text(), src.repo, src.repo);
+    await useText(await res.text(), src.repo, src.repo);
     const url = new URL(location.href);
     url.search = src.repo === DEFAULT_REPO ? '' : `?repo=${encodeURIComponent(input.trim())}`;
     history.replaceState(null, '', url);
@@ -519,14 +530,115 @@ async function load(input) {
   }
 }
 
+// ── Remember on this device ──────────────────────────────────────────────
+// Kept per repo (each repo is its own "account") and per device: localStorage never leaves this browser.
+// Plain values are stored as values. Secrets are only ever stored encrypted (AES-GCM) with a key that cannot be
+// exported and lives in this browser's IndexedDB, so the saved copy is useless anywhere else. If encryption is
+// unavailable, secrets are simply not saved. Nothing here makes a network request.
+const STORE_PREFIX = 'pitchside.setup.v1:';
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
+const aad = (repo, key) => new TextEncoder().encode(`${repo}\n${key}`); // ties a ciphertext to its repo and field
+
+function openKeyDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('pitchside-setup', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('keys');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function deviceKey({ create }) {
+  const db = await openKeyDb();
+  try {
+    let key = await new Promise((res, rej) => { const r = db.transaction('keys').objectStore('keys').get('device'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    if (!key && create) {
+      key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').put(key, 'device'); t.oncomplete = res; t.onerror = () => rej(t.error); });
+    }
+    return key ?? null;
+  } finally { db.close(); }
+}
+async function seal(text, repo, key) {
+  const k = await deviceKey({ create: true });
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad(repo, key) }, k, new TextEncoder().encode(text));
+  return { iv: b64(iv), data: b64(data) };
+}
+async function unseal(box, repo, key) {
+  const k = await deviceKey({ create: false });
+  if (!k) throw new Error('this device has no key for it');
+  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv), additionalData: aad(repo, key) }, k, unb64(box.data)));
+}
+
+function setSaved(text) { $('saved').textContent = text; }
+let dirty = false; // entries changed since the last save or restore
+
+async function persist() {
+  if (!model) return;
+  const repo = model.repo || 'pasted';
+  const entry = { v: 1, savedAt: Date.now(), values: {}, secrets: {} };
+  let skipped = 0;
+  for (const [key, value] of values) {
+    if (isSensitive(key)) { try { entry.secrets[key] = await seal(value, repo, key); } catch { skipped++; } }
+    else entry.values[key] = value;
+  }
+  const plain = Object.keys(entry.values).length;
+  const secret = Object.keys(entry.secrets).length;
+  try {
+    if (plain + secret) localStorage.setItem(STORE_PREFIX + repo, JSON.stringify(entry)); else localStorage.removeItem(STORE_PREFIX + repo);
+  } catch { return setSaved('This browser blocked saving, so nothing is remembered.'); }
+  dirty = false;
+  const parts = [plain && `${plain} value${plain === 1 ? '' : 's'}`, secret && `${secret} secret${secret === 1 ? '' : 's'} (encrypted)`].filter(Boolean);
+  setSaved(`${parts.length ? `Saved on this device: ${parts.join(', ')}.` : 'Nothing saved yet.'}${skipped ? ` ${skipped} secret${skipped === 1 ? ' was' : 's were'} not saved: this browser cannot encrypt them.` : ''}`);
+}
+// Typing never saves by itself; it only marks the changes as unsaved. The Save button is the one way to keep them.
+function markUnsaved() {
+  dirty = true;
+  setSaved('Unsaved changes. Tap "Save on this device" to keep them.');
+}
+
+/** Puts back what this device saved for this repo. Returns how many entries came back and how many secrets could not be unlocked. */
+async function restore(repo) {
+  let entry;
+  try { entry = JSON.parse(localStorage.getItem(STORE_PREFIX + repo) ?? 'null'); } catch { return { n: 0, lost: 0 }; }
+  if (!entry || entry.v !== 1) return { n: 0, lost: 0 };
+  const known = new Set(model.vars.map((v) => v.key));
+  let n = 0;
+  let lost = 0;
+  for (const [key, value] of Object.entries(entry.values ?? {})) {
+    if (known.has(key) && !isSensitive(key) && typeof value === 'string') { values.set(key, value); n++; } // a secret is never read back from the plain part
+  }
+  for (const [key, box] of Object.entries(entry.secrets ?? {})) {
+    if (!known.has(key) || !isSensitive(key)) continue;
+    try { values.set(key, await unseal(box, repo, key)); n++; } catch { lost++; }
+  }
+  return { n, lost };
+}
+
+function forgetAll() {
+  for (const k of Object.keys(localStorage)) if (k.startsWith(STORE_PREFIX)) localStorage.removeItem(k);
+  try { indexedDB.deleteDatabase('pitchside-setup'); } catch {}
+  values.clear();
+  dirty = false;
+  if (model) renderForm();
+  setSaved('Forgot everything saved on this device.');
+}
+
+let persisting = Promise.resolve();
+
 // ── Wiring ───────────────────────────────────────────────────────────────
 $('loader').onsubmit = (e) => { e.preventDefault(); load($('source').value || DEFAULT_REPO); };
 $('paste-toggle').onclick = () => { $('paste').hidden = !$('paste').hidden; if (!$('paste').hidden) $('paste').focus(); };
 $('paste').oninput = () => {
   const text = $('paste').value;
   if (!text.trim()) return;
-  try { useText(text, $('source').value.trim().toLowerCase() || 'pasted', 'pasted text'); } catch (err) { setMsg(err.message, true); }
+  useText(text, $('source').value.trim().toLowerCase() || 'pasted', 'pasted text').catch((err) => setMsg(err.message, true));
 };
+$('save').onclick = () => {
+  persisting = persisting.then(persist).catch(() => setSaved('Could not save in this browser.'));
+};
+$('forget').onclick = forgetAll;
 $('filter').oninput = applyFilter;
 $('only-filled').onchange = renderOutput;
 $('show').onchange = () => {
@@ -554,7 +666,7 @@ $('download').onclick = () => {
   $('notice').textContent = 'Saved. Next: run npm start in the project folder, then use “Open the app” above. Some browsers rename dotfiles to "env" or "_env"; if so, rename it to .env and put it in the project folder. Never commit it.';
   $('notice').hidden = false;
 };
-window.addEventListener('beforeunload', (e) => { if (values.size) e.preventDefault(); });
+window.addEventListener('beforeunload', (e) => { if (dirty) e.preventDefault(); });
 
 const initial = new URLSearchParams(location.search).get('repo') || DEFAULT_REPO;
 $('source').value = initial;

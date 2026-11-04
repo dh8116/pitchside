@@ -107,7 +107,7 @@ Open the browser chat to try the coach before you wire up any messaging channel.
 
 Requires Node 20.12+ and one model key (see the table above).
 
-**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/setup/) loads this repo's `.env.example`, explains every setting with a link and a short "How to get this" guide for each key, generates secrets in one click, and gives you a finished `.env` to copy or download, then an **Open the app** button takes you straight to the browser chat once a model is set. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. It works for any public repo too: `?repo=owner/name`.
+**Prefer a form?** The [.env builder](https://dh8116.github.io/pitchside/setup/) loads this repo's `.env.example`, explains every setting with a link and a short "How to get this" guide for each key, generates secrets in one click, and gives you a finished `.env` to copy or download, then an **Open the app** button takes you straight to the browser chat once a model is set. It runs entirely in your browser: its security policy blocks every request except fetching the public `.env.example`, so your keys never leave the page. **Save on this device** keeps what you've entered for next time, per repo and on this browser only: plain values as they are, secrets (keys, tokens, passwords) encrypted with a key that never leaves the browser, so a copied save is useless on another device. Nothing is saved unless you tap Save, and **Forget saved** removes it all. It works for any public repo too: `?repo=owner/name`.
 
 ## "I just want to message it": the 15-minute setup
 
