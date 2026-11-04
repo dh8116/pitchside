@@ -260,3 +260,79 @@ $('gate').onsubmit = (e) => {
 };
 
 restore().catch(() => {});
+
+// ---- Import: bring in an intro from another AI, a file, or a website ----
+const IMPORT_FILE_BYTES = 300_000;
+let importFile = null; // { name, text } once a file is chosen
+
+function importStatus(message, isError = false) {
+  $('import-status').textContent = message;
+  $('import-status').classList.toggle('error', isError);
+}
+
+$('import').onclick = () => {
+  toggleSessions(false);
+  importStatus('');
+  $('import-dialog').showModal();
+};
+$('import-cancel').onclick = () => $('import-dialog').close();
+
+// The prompt to paste into ChatGPT / Claude / Gemini comes from the server, so there is one copy of it.
+$('import-ask').addEventListener('toggle', async () => {
+  if (!$('import-ask').open || $('import-prompt').value) return;
+  try {
+    const res = await fetch('/api/web/import-prompt', { headers: authHeaders() });
+    $('import-prompt').value = (await res.json()).prompt ?? '';
+  } catch { importStatus("Couldn't load the prompt. Check your connection.", true); }
+});
+$('copy-prompt').onclick = async () => {
+  $('import-prompt').select();
+  try { await navigator.clipboard.writeText($('import-prompt').value); importStatus('Copied. Paste it into ChatGPT, Claude or Gemini, then paste its answer here.'); }
+  catch { importStatus('Select the text above and copy it.'); }
+};
+
+$('import-file').onchange = async () => {
+  const file = $('import-file').files[0];
+  importFile = null;
+  if (!file) return importStatus('');
+  if (/\.(pdf|docx?|pptx?|xlsx?|zip|png|jpe?g|gif|webp)$/i.test(file.name) || /^(image|audio|video)\//.test(file.type)) {
+    $('import-file').value = '';
+    return importStatus("I can't read that kind of file here. Save it as .txt or .md, or paste the text.", true);
+  }
+  try {
+    importFile = { name: file.name, text: await file.slice(0, IMPORT_FILE_BYTES).text() };
+    importStatus(file.size > IMPORT_FILE_BYTES ? `Loaded the first ${Math.round(IMPORT_FILE_BYTES / 1000)} KB of ${file.name}.` : `Loaded ${file.name}.`);
+  } catch { importStatus("Couldn't read that file.", true); }
+};
+
+$('import-form').onsubmit = async (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const pasted = $('import-text').value.trim();
+  const url = $('import-url').value.trim();
+  const jobs = [];
+  if (pasted || importFile) {
+    jobs.push({ label: importFile?.name ?? 'what you pasted', body: { source: importFile ? 'file' : 'paste', label: importFile?.name ?? '', text: [pasted, importFile?.text].filter(Boolean).join('\n\n') } });
+  }
+  if (url) jobs.push({ label: url, body: { source: 'url', url } });
+  if (!jobs.length) return importStatus('Paste something, add a file, or give a website first.', true);
+
+  setBusy(true);
+  $('import-go').disabled = true;
+  try {
+    for (const job of jobs) {
+      importStatus(`Reading ${job.label.slice(0, 60)}…`);
+      const { bubbles } = await api('/api/web/import', { id: webId, ...job.body });
+      touchSession(webId, 'Imported context');
+      addMessage('out', { type: 'text', text: `Import: ${job.label.slice(0, 60)}` });
+      bubbles.forEach((b) => addMessage('in', b));
+    }
+    $('import-text').value = ''; $('import-url').value = ''; $('import-file').value = ''; importFile = null;
+    $('import-dialog').close();
+  } catch (err) {
+    importStatus(err.message, true);
+  } finally {
+    setBusy(false);
+    $('import-go').disabled = false;
+  }
+};

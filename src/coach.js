@@ -4,7 +4,9 @@ import { COACH_PROMPT, COACH_PROMPT_LITE, CHECKIN_REQUEST } from './prompts.js';
 import { parseReply, stripContextEcho } from './format.js';
 import { newUser } from './users.js';
 import { KNOWLEDGE } from './knowledge.js';
+import { IMPORT_PROMPT, cleanFacts, fetchPage as fetchPublicPage, htmlToText, readableText } from './import.js';
 
+const MAX_IMPORTS_PER_DAY = 20;
 const SYSTEM = `${COACH_PROMPT}\n\n${KNOWLEDGE}`;
 const MAX_HISTORY = 80;
 const MAX_NOTES = 40;
@@ -56,7 +58,7 @@ export function buildMessages(user, turnText, now = new Date(), opts) {
   return [...history, { role: 'user', content: `${contextLine(user, now, opts)}\n${turnText}` }];
 }
 
-const HELP = `Commands: "timezone Europe/London" sets your clock for check-ins · "pause" stops morning check-ins · "resume" turns them back on · "restart challenge" starts a new 30 days · "reset" forgets this conversation.`;
+const HELP = `Commands: "timezone Europe/London" sets your clock for check-ins · "pause" stops morning check-ins · "resume" turns them back on · "restart challenge" starts a new 30 days · "reset" forgets this conversation · "notes" lists what I remember about you · "forget 3" removes one note · "import https://…" reads a website into my notes.`;
 
 function handleCommand(user, text, now) {
   const t = text.trim();
@@ -72,10 +74,18 @@ function handleCommand(user, text, now) {
   if (lower === 'restart challenge') { user.challengeStartedAt = now.toISOString(); return 'New 30 days starts today. Day 1: tell me the one result you want by day 30.'; }
   if (lower === 'reset') { user.messages = []; user.notes = []; user.challengeStartedAt = null; return 'Clean slate. What are you working on?'; }
   if (lower === 'help' || lower === 'commands') return HELP;
+  if (lower === 'notes') return user.notes.length ? `What I remember:\n${user.notes.map((n, i) => `${i + 1}. ${n}`).join('\n')}\nSay "forget 2" to remove one.` : "I don't remember anything about you yet.";
+  const forget = lower.match(/^forget\s+(\d{1,3})$/);
+  if (forget) {
+    const i = Number(forget[1]) - 1;
+    if (!user.notes[i]) return `There's no note ${forget[1]}. Say "notes" to see them.`;
+    const [gone] = user.notes.splice(i, 1);
+    return `Forgot: ${gone}`;
+  }
   return null;
 }
 
-export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
+export function createCoach({ llm, users, webSearch = true, channels = {}, publisher = null, connectivity = null, fetchPage = fetchPublicPage, maxTurnsPerDay = 150, log = console, now = () => new Date() }) {
   const queues = new Map();
 
   async function loadUser(key) {
@@ -125,6 +135,66 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
   }
 
   /**
+   * Turns imported material (an intro from another AI, a pasted note, a file's text, or a website) into notes.
+   * The model only ever reads it as data; the facts it returns are cleaned, shown back with numbers, and can be
+   * removed with "forget N".
+   */
+  async function doImport(user, { source = 'paste', label = '', text = '', url = '' }, t) {
+    const today = localParts(user.timezone, t).date;
+    const day = user.importDay?.date === today ? user.importDay : { date: today, count: 0 };
+    if (day.count >= MAX_IMPORTS_PER_DAY) return [{ type: 'text', text: "That's plenty of imports for one day. Let's work with what I have, and bring more tomorrow." }];
+
+    let material = text;
+    let from = label || (source === 'file' ? 'that file' : source === 'url' ? url : 'what you pasted');
+    if (source === 'url') {
+      try {
+        const page = await fetchPage(url);
+        material = /html/i.test(page.type) ? htmlToText(page.text) : page.text;
+        from = label || page.url;
+      } catch (err) {
+        const safe = ['EBLOCKED', 'EHTTP', 'ETIMEDOUT'].includes(err.code) ? ` ${err.message}` : '';
+        return [{ type: 'text', text: `I couldn't read that address.${safe} Check it, or paste the text here instead.` }];
+      }
+    }
+    const clean = readableText(material);
+    if (clean.length < 20) return [{ type: 'text', text: "There wasn't enough text in that to import. Paste the content here instead." }];
+    from = from.slice(0, 80);
+
+    day.count += 1;
+    user.importDay = day;
+    const raw = await llm.complete({
+      system: IMPORT_PROMPT,
+      systemLite: IMPORT_PROMPT,
+      webSearch: false,
+      messages: [{ role: 'user', content: `Material from ${from}:\n<<<\n${clean}\n>>>` }],
+    });
+    const fresh = cleanFacts(parseReply(raw).memories).filter((f) => !user.notes.includes(f));
+    remember(user, fresh);
+    const saved = fresh.map((f) => [user.notes.indexOf(f) + 1, f]).filter(([n]) => n > 0);
+    const bubbles = saved.length
+      ? [
+        { type: 'text', text: `Imported from ${from}. I saved ${saved.length} thing${saved.length === 1 ? '' : 's'}:` },
+        { type: 'text', text: saved.map(([n, f]) => `${n}. ${f}`).join('\n') },
+        { type: 'text', text: 'Anything wrong or private? Say "forget 2" to remove one, or "notes" to see everything. Tell me what is missing and I will skip the questions I already have answers to.' },
+      ]
+      : [{ type: 'text', text: `I read ${from} but found nothing new I could use. If it is an intro from another AI, paste the intro text itself.` }];
+    const at = t.toISOString();
+    user.messages.push({ role: 'user', content: `(imported ${from})`, at }, { role: 'assistant', content: bubbles.map((b) => b.text).join('\n\n'), at: now().toISOString() });
+    return bubbles;
+  }
+
+  /** The web chat's Import dialog: paste, file text or a web address. */
+  function importContext({ key, source, label, text, url }) {
+    return serialize(key, async () => {
+      const t = now();
+      const user = (await loadUser(key)) ?? newUser(key, 'web', key.replace(/^web:/, ''));
+      const bubbles = await doImport(user, { source, label, text, url }, t);
+      await users.save(user);
+      return bubbles;
+    });
+  }
+
+  /**
    * Handle one inbound message. Returns the reply bubbles (also delivered
    * through the person's channel unless deliver === false).
    */
@@ -145,6 +215,7 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
 
       let bubbles = publisher ? await publisher.command(user, body) : null;
       const commandReply = bubbles ? null : handleCommand(user, body, t);
+      const importUrl = bubbles || commandReply ? null : body.match(/^import\s+(https?:\/\/\S+)$/i)?.[1];
       const today = localParts(user.timezone, t).date;
       const turnsToday = user.messages.filter((m) => m.role === 'user' && m.at?.startsWith(today)).length;
 
@@ -152,6 +223,8 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
         // A "post it" reply from the publisher.
       } else if (commandReply) {
         bubbles = [{ type: 'text', text: commandReply }];
+      } else if (importUrl) {
+        bubbles = await doImport(user, { source: 'url', url: importUrl }, t);
       } else if (turnsToday >= maxTurnsPerDay) {
         bubbles = [{ type: 'text', text: "That's a lot for one day. Go do the work and tell me how it went tomorrow." }];
       } else {
@@ -205,5 +278,5 @@ export function createCoach({ llm, users, webSearch = true, channels = {}, publi
     });
   }
 
-  return { handleInbound, checkin, runCheckins, publishDraft };
+  return { handleInbound, checkin, runCheckins, publishDraft, importContext };
 }

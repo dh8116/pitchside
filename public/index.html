@@ -17,7 +17,10 @@
       <img src="favicon.svg" alt="" width="44" height="44">
       <strong>Pitchside</strong>
     </div>
-    <button id="new" class="link" title="Start a new conversation">New</button>
+    <div class="actions-right">
+      <button id="import" class="link" type="button" title="Bring in context from ChatGPT, Claude, a file or a website">Import</button>
+      <button id="new" class="link" title="Start a new conversation">New</button>
+    </div>
   </header>
 
   <nav id="sessions" class="sessions" hidden aria-label="Earlier conversations"></nav>
@@ -37,6 +40,33 @@
       <div id="log" class="log" aria-live="polite"></div>
     </div>
   </main>
+
+  <dialog id="import-dialog" class="import" aria-labelledby="import-title">
+    <form id="import-form">
+      <h2 id="import-title">Bring in what you already have</h2>
+      <p class="sub">Paste an intro from ChatGPT, Claude or Gemini, add a file, or give a website. I keep a few short facts and show you every one. You can remove any of them.</p>
+      <details id="import-ask">
+        <summary>Get an intro from another AI</summary>
+        <p class="sub">Copy this, paste it into ChatGPT, Claude or Gemini, then paste its answer below.</p>
+        <textarea id="import-prompt" rows="5" readonly aria-label="Prompt to paste into another AI"></textarea>
+        <button type="button" id="copy-prompt" class="secondary">Copy the prompt</button>
+      </details>
+      <label>Paste text
+        <textarea id="import-text" rows="6" placeholder="Their intro, your notes, a pitch, a bio…"></textarea>
+      </label>
+      <label>Or add a file <span class="hint-inline">.txt .md .csv .json .html</span>
+        <input id="import-file" type="file" accept=".txt,.md,.markdown,.csv,.json,.html,.htm,text/*">
+      </label>
+      <label>Or a website
+        <input id="import-url" type="url" inputmode="url" placeholder="https://yourproduct.com" autocomplete="off">
+      </label>
+      <p id="import-status" class="status" role="status"></p>
+      <div class="row">
+        <button type="button" id="import-cancel" class="secondary">Cancel</button>
+        <button type="submit" id="import-go" class="primary-btn">Import</button>
+      </div>
+    </form>
+  </dialog>
 
   <footer class="dock">
     <form id="form" class="composer column">

@@ -120,3 +120,25 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 
 @keyframes blink { 0%, 80%, 100% { opacity: .3; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .typing i { animation: none; } }
+
+/* Import dialog */
+.actions-right { display: flex; justify-content: flex-end; gap: 6px; }
+.import { width: min(520px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; border: 1px solid var(--border); border-radius: 16px; padding: 18px; background: var(--bg); color: var(--text); box-shadow: 0 24px 60px -20px rgb(0 0 0 / .4); }
+.import::backdrop { background: rgb(0 0 0 / .35); }
+.import h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.import .sub { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
+.import label { display: block; margin: 12px 0 0; font-size: 14px; font-weight: 500; }
+.import .hint-inline { color: var(--muted); font-weight: 400; margin-left: 4px; }
+.import textarea, .import input[type="url"] { display: block; width: 100%; margin-top: 6px; font: inherit; font-size: 15px; padding: 9px 12px; border: 1px solid #c7c7cc; border-radius: 12px; background: var(--bg); color: inherit; }
+.import input[type="file"] { display: block; margin-top: 6px; font-size: 14px; max-width: 100%; }
+.import textarea:focus, .import input[type="url"]:focus { outline: none; border-color: var(--sent); }
+.import details { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--green-soft); }
+.import summary { cursor: pointer; font-weight: 500; color: var(--green-dark); }
+.import details[open] summary { margin-bottom: 8px; }
+.import details textarea { font-size: 13px; background: var(--bg); }
+.import .status { min-height: 1.3em; margin: 12px 0 0; font-size: 14px; color: var(--muted); }
+.import .status.error { color: var(--error); }
+.import .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.import .secondary { padding: 8px 16px; border-radius: 20px; border: 1px solid #c7c7cc; }
+.import details .secondary { margin-top: 8px; }
+.import .primary-btn { padding: 8px 22px; border-radius: 20px; background: var(--sent); color: #fff; font-weight: 600; }

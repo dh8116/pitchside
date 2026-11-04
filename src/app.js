@@ -5,6 +5,10 @@ import { parseReply } from './format.js';
 import { CHECKIN_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
+import { INTRO_PROMPT } from './import.js';
+
+const IMPORT_SOURCES = new Set(['paste', 'file', 'url']);
+const MAX_IMPORT_TEXT = 300_000; // characters accepted from the browser; the coach keeps the first part
 
 const MAX_BODY = 1_000_000;
 const UUID_RE = /^[0-9a-f-]{36}$/;
@@ -117,6 +121,30 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
           if (!Number.isInteger(postId)) return send(res, 400, { error: 'postId must be an integer' });
           try {
             return send(res, 200, { bubbles: await coach.publishDraft({ key: `web:${id}`, postId }) });
+          } catch (err) {
+            log.error(err);
+            return send(res, 502, { error: friendlyError(err) });
+          }
+        }
+        // Import dialog: the prompt to paste into ChatGPT / Claude / Gemini, and the import itself.
+        if (req.method === 'GET' && pathname === '/api/web/import-prompt') return send(res, 200, { prompt: INTRO_PROMPT });
+        if (req.method === 'POST' && pathname === '/api/web/import') {
+          let body;
+          try { body = JSON.parse((await readBody(req)).toString('utf8')); } catch { return send(res, 400, { error: 'invalid JSON' }); }
+          const { id, source, label, text, url } = body ?? {};
+          if (!UUID_RE.test(String(id))) return send(res, 400, { error: 'id must be a UUID' });
+          if (!IMPORT_SOURCES.has(source)) return send(res, 400, { error: 'source must be paste, file or url' });
+          if (source === 'url' ? !/^https?:\/\/\S{3,2000}$/i.test(String(url)) : typeof text !== 'string' || !text.trim()) {
+            return send(res, 400, { error: source === 'url' ? 'url must be an http(s) address' : 'text is required' });
+          }
+          try {
+            const bubbles = await coach.importContext({
+              key: `web:${id}`, source,
+              label: typeof label === 'string' ? label.slice(0, 80) : '',
+              text: typeof text === 'string' ? text.slice(0, MAX_IMPORT_TEXT) : '',
+              url: typeof url === 'string' ? url : '',
+            });
+            return send(res, 200, { bubbles });
           } catch (err) {
             log.error(err);
             return send(res, 502, { error: friendlyError(err) });

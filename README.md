@@ -50,6 +50,16 @@ Free tiers have rate limits, which is fine for one person or a small group.
 - **Local models get a lighter request** so replies come back in seconds on a laptop: a short coaching prompt, recent history only, a capped reply length and one trimmed search round. The model is loaded when the server starts.
 - **Posting waits for a connection.** Drafting keeps working offline and drafts are saved. The Post buttons grey out and "post it" is held until the app is online again, then they work as normal. `ONLINE_CHECK_URL` sets which address is used to check the connection.
 
+### Research briefs
+Anything Pitchside looks up (competitors, a market, a prospect) comes back in the same shape every time, so it is quick to scan: a one-line **Verdict**, up to five numbered findings, a **Move** for this week, and an **Unverified** line for anything it couldn't confirm. Every fact ends with the link it came from, and a claim with no source goes under Unverified instead. The prompt carries one hand-built example of the shape, which small local models follow well.
+
+### Bring in what you already have
+Tap **Import** in the web chat (or text `import https://yourproduct.com` from any channel):
+- **An intro from another AI.** The dialog has a prompt to paste into ChatGPT, Claude or Gemini; paste its answer back and Pitchside skips the questions it can already answer.
+- **A note or file** from another app (`.txt`, `.md`, `.csv`, `.json`, `.html`), or **a website**.
+
+Imported text is treated as data, never instructions. A model boils it down to at most 12 short facts, which are cleaned (passwords, keys, emails, phone numbers and "ignore previous instructions" lines are dropped) and shown back to you, numbered. Text `notes` to see everything Pitchside remembers and `forget 3` to remove one. Website imports only fetch public http(s) pages: private, loopback and link-local addresses are refused (checked again on every redirect and at connection time), with a size and time limit. Up to 20 imports a day per person.
+
 ### Chat history and sessions
 Every conversation is saved on your server (in `DATA_DIR`), so the browser chat restores it on reload. The **Chats** button lists your earlier conversations and reopens any of them; **New** starts a fresh one. On a host that restarts, mount a volume at `DATA_DIR` so history survives.
 
