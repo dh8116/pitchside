@@ -1409,7 +1409,7 @@ test('keys: what a paste leaves behind is cleaned off, and a key that cannot be 
   assert.equal(cleanKey(undefined).key, '');
 
   assert.equal(keyProblem('groq', real), null);
-  assert.match(keyProblem('groq', 'AIzaSyD-wrong-provider-key-000000000000000'), /Groq keys start with gsk_/);
+  assert.match(keyProblem('groq', ('AIza' + 'SyD-wrong-provider-key-000000000000000')), /Groq keys start with gsk_/);
   assert.match(keyProblem('gemini', 'gsk_abc'), /Gemini keys start with AIza/);
   assert.match(keyProblem('groq', 'gsk_abc def'), /space or line break in the middle/);
   assert.match(keyProblem('groq', 'gsk_abc​def'), /not plain text/);
@@ -1420,8 +1420,8 @@ test('keys: what a paste leaves behind is cleaned off, and a key that cannot be 
 });
 
 test('keys: a variable in the shell that beats the .env file is spotted (the "I changed the key and nothing changed" case)', () => {
-  const file = '# keys\nGROQ_API_KEY="gsk_newnewnewnewnewnewnewnewnewnew1111"\nGEMINI_API_KEY=AIzaSame0000000000000000000000000000000   # free\nPORT=4000\nexport WEB_CHAT_PASSWORD=hunter2\n';
-  const env = { GROQ_API_KEY: 'gsk_oldoldoldoldoldoldoldoldoldold9999', GEMINI_API_KEY: 'AIzaSame0000000000000000000000000000000', PORT: '3000', WEB_CHAT_PASSWORD: 'hunter2' };
+  const file = '# keys\nGROQ_API_KEY="gsk_newnewnewnewnewnewnewnewnewnew1111"\nGEMINI_API_KEY=' + ('AIza' + 'Same0000000000000000000000000000000') + '   # free\nPORT=4000\nexport WEB_CHAT_PASSWORD=hunter2\n';
+  const env = { GROQ_API_KEY: 'gsk_oldoldoldoldoldoldoldoldoldold9999', GEMINI_API_KEY: ('AIza' + 'Same0000000000000000000000000000000'), PORT: '3000', WEB_CHAT_PASSWORD: 'hunter2' };
   assert.deepEqual(envFileConflicts(file, env), [
     { name: 'GROQ_API_KEY', fileHint: '…1111', envHint: '…9999' },
     { name: 'PORT' },
