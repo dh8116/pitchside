@@ -12,9 +12,11 @@ export function cleanForSpeech(text) {
     .replace(/\((?:source|sources):[^)]*\)/gi, '')
     .replace(/\bSources?:\s*(?:https?:\/\/\S+\s*)+/gi, '')
     .replace(URL_RE, (u) => host(u))
-    .replace(/[*_`#>]+/g, '')
+    .replace(/[*`]+/g, '')
+    .replace(/^[ \t]*(?:#{1,6}|>+)[ \t]*/gm, '')
     .replace(/^\s*[-•]\s+/gm, '')
     .replace(/[ \t]+/g, ' ')
+    .replace(/ ([.,!?;:])/g, '$1')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

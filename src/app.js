@@ -75,11 +75,21 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
     try {
       if (pathname === '/health') return send(res, 200, { ok: true, channels: Object.keys(channels) });
 
-      const hook = pathname.match(/^\/webhooks\/([a-z]+)$/);
+      const hook = pathname.match(/^\/webhooks\/([a-z]+)(\/[a-z]+)?$/);
       if (hook) {
         const channel = channels[hook[1]];
-        if (!channel) return send(res, 404, { error: 'channel not configured' });
+        if (!channel || (hook[2] && !channel.handle)) return send(res, 404, { error: 'channel not configured' });
         const rawBody = req.method === 'POST' ? await readBody(req) : Buffer.alloc(0);
+        // Channels that answer in-line (phone calls) take the coach and reply themselves.
+        if (channel.handle) {
+          try {
+            const result = await channel.handle({ method: req.method, url, headers: req.headers, rawBody, coach });
+            return send(res, result.status, result.body, result.headers);
+          } catch (err) {
+            log.error(`bad ${hook[1]} webhook`, err);
+            return send(res, 400, { error: 'bad payload' });
+          }
+        }
         let result;
         try {
           result = channel.webhook({ method: req.method, url, headers: req.headers, rawBody });

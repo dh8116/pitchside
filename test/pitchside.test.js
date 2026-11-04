@@ -958,3 +958,99 @@ test('speech: replies are cleaned for the ear: links as site names, no sources c
   for (const yes of ['goodbye', 'Bye.', "that's all", 'OK, bye bye!', 'end call', 'hang up']) assert.equal(isGoodbye(yes), true, yes);
   for (const no of ['goodbye to cold emails is a bad idea', 'who should I call?', '']) assert.equal(isGoodbye(no), false, no);
 });
+
+import { twilioVoice } from '../src/channels/voice.js';
+
+const VOICE_BASE = 'https://pitchside.example';
+const VOICE_TOKEN = 'tok';
+/** A Twilio-signed POST to the voice channel. */
+function voiceCall(ch, coach, pathAndQuery, params, { sign = true } = {}) {
+  const url = new URL(pathAndQuery, VOICE_BASE);
+  const body = new URLSearchParams(params).toString();
+  const signature = sign ? twilioSignature(VOICE_TOKEN, `${VOICE_BASE}${url.pathname}${url.search}`, params) : 'bad';
+  return ch.handle({ method: 'POST', url, headers: { 'x-twilio-signature': signature }, rawBody: Buffer.from(body), coach });
+}
+
+test('phone calls: greeting, speech in, reply spoken after a short wait, memory shared with the SMS number', async () => {
+  const handled = [];
+  let finish;
+  const coach = { handleInbound: (m) => { handled.push(m); return new Promise((r) => { finish = r; }); } };
+  const ch = twilioVoice({ authToken: VOICE_TOKEN, publicUrl: VOICE_BASE, pollSeconds: 1 });
+  const caller = { From: '+15551234567', CallSid: 'CA1' };
+
+  const hello = await voiceCall(ch, coach, '/webhooks/voice', caller);
+  assert.equal(hello.headers['content-type'], 'text/xml');
+  assert.match(hello.body, /<Gather input="speech" action="https:\/\/pitchside\.example\/webhooks\/voice\/turn"/);
+  assert.match(hello.body, /Hi, Pitchside here/);
+
+  const turn = await voiceCall(ch, coach, '/webhooks/voice/turn', { ...caller, SpeechResult: 'who should I call at the clinic' });
+  assert.match(turn.body, /<Say[^>]*>One moment\.<\/Say>.*<Redirect method="POST">https:\/\/pitchside\.example\/webhooks\/voice\/poll\?sid=CA1&amp;n=1<\/Redirect>/);
+  assert.equal(handled[0].key, 'sms:+15551234567', 'a caller is the same person as their SMS number');
+  assert.equal(handled[0].channel, 'twilio');
+  assert.equal(handled[0].address, '+15551234567');
+  assert.equal(handled[0].deliver, false, 'the reply is spoken, not also texted');
+  assert.equal(handled[0].text, 'who should I call at the clinic');
+
+  const waiting = await voiceCall(ch, coach, '/webhooks/voice/poll?sid=CA1&n=1', caller);
+  assert.match(waiting.body, /<Pause length="1"\/><Redirect method="POST">[^<]*poll\?sid=CA1&amp;n=2/);
+
+  finish([{ type: 'text', text: 'Call the practice manager & ask for <Dr. Lee>.' }, { type: 'text', text: 'Try Tuesday at 8am (source: https://acme.example/x).' }]);
+  await new Promise((r) => setImmediate(r));
+  const answer = await voiceCall(ch, coach, '/webhooks/voice/poll?sid=CA1&n=2', caller);
+  assert.match(answer.body, /Call the practice manager &amp; ask for &lt;Dr\. Lee&gt;\.\n\nTry Tuesday at 8am\./, 'text is XML-escaped and cleaned for speech');
+  assert.doesNotMatch(answer.body, /acme\.example|source/);
+  assert.match(answer.body, /<Gather input="speech"[^>]*>.*<\/Gather><Redirect method="POST">https:\/\/pitchside\.example\/webhooks\/voice\/turn\?silent=1</s, 'listens again, and silence goes to the silence handler');
+  assert.match((await voiceCall(ch, coach, '/webhooks/voice/poll?sid=CA1&n=3', caller)).body, /lost track/, 'a finished job is not replayed');
+});
+
+test('phone calls: bad signatures, hidden numbers, silence, goodbye, slow or failed replies', async () => {
+  let called = 0;
+  const coach = { handleInbound: () => { called++; return new Promise(() => {}); } };
+  const ch = twilioVoice({ authToken: VOICE_TOKEN, publicUrl: VOICE_BASE, maxPolls: 2 });
+  const caller = { From: '+15551234567', CallSid: 'CA2' };
+
+  assert.equal((await voiceCall(ch, coach, '/webhooks/voice', caller, { sign: false })).status, 401);
+  assert.equal((await ch.handle({ method: 'GET', url: new URL('/webhooks/voice', VOICE_BASE), headers: {}, rawBody: Buffer.alloc(0), coach })).status, 405);
+  assert.match((await voiceCall(ch, coach, '/webhooks/voice', { From: 'anonymous', CallSid: 'CA3' })).body, /hidden numbers.*<Hangup\/>/s);
+  assert.equal((await voiceCall(ch, coach, '/webhooks/voice/nope', caller)).status, 404);
+
+  const bye = await voiceCall(ch, coach, '/webhooks/voice/turn', { ...caller, SpeechResult: 'ok bye' });
+  assert.match(bye.body, /Talk soon\.<\/Say><Hangup\/>/);
+  assert.equal(called, 0, 'goodbye never reaches the model');
+
+  const quiet1 = await voiceCall(ch, coach, '/webhooks/voice/turn', caller);
+  assert.match(quiet1.body, /Are you still there\?.*turn\?silent=1/s);
+  const quiet2 = await voiceCall(ch, coach, '/webhooks/voice/turn?silent=1', caller);
+  assert.match(quiet2.body, /didn&apos;t catch|didn't catch/);
+  assert.match(quiet2.body, /turn\?silent=2/);
+  assert.match((await voiceCall(ch, coach, '/webhooks/voice/turn?silent=2', caller)).body, /let you go.*<Hangup\/>/s);
+
+  await voiceCall(ch, coach, '/webhooks/voice/turn', { ...caller, SpeechResult: 'a slow question' });
+  assert.match((await voiceCall(ch, coach, '/webhooks/voice/poll?sid=CA2&n=1', caller)).body, /n=2/);
+  assert.match((await voiceCall(ch, coach, '/webhooks/voice/poll?sid=CA2&n=2', caller)).body, /taking too long/);
+
+  const failing = twilioVoice({ authToken: VOICE_TOKEN, publicUrl: VOICE_BASE });
+  const broken = { handleInbound: async () => { throw new Error('model down'); } };
+  await voiceCall(failing, broken, '/webhooks/voice/turn', { ...caller, SpeechResult: 'hello there' });
+  await new Promise((r) => setImmediate(r));
+  assert.match((await voiceCall(failing, broken, '/webhooks/voice/poll?sid=CA2&n=1', caller)).body, /something went wrong/);
+});
+
+test('phone calls: the HTTP app routes /webhooks/voice/* to the voice channel, and only voice has sub-paths', async () => {
+  const coach = { handleInbound: async () => [{ type: 'text', text: 'Hi.' }] };
+  const channels = { voice: twilioVoice({ authToken: VOICE_TOKEN, publicUrl: VOICE_BASE }), twilio: twilioChannel({ accountSid: 'AC', authToken: VOICE_TOKEN, publicUrl: VOICE_BASE }) };
+  const app = createApp({ coach, users: await tmpStore(), channels, publicDir: path.resolve('public'), log: { error() {} } });
+  const server = http.createServer(app).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const params = { From: '+15551234567', CallSid: 'CA9' };
+    const post = (p, sig) => fetch(`${base}${p}`, { method: 'POST', headers: { 'x-twilio-signature': sig, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params).toString() });
+    const ok = await post('/webhooks/voice', twilioSignature(VOICE_TOKEN, `${VOICE_BASE}/webhooks/voice`, params));
+    assert.equal(ok.status, 200);
+    assert.match(await ok.text(), /<Gather/);
+    assert.equal((await post('/webhooks/voice', 'bad')).status, 401);
+    assert.equal((await post('/webhooks/twilio/extra', 'x')).status, 404, 'channels without handle() have no sub-paths');
+  } finally {
+    server.close();
+  }
+});

@@ -11,6 +11,7 @@ import { createPublisher, postersFromEnv, parseOwners } from './src/posting/inde
 import { createUserStore } from './src/users.js';
 import { whatsappChannel } from './src/channels/whatsapp.js';
 import { twilioChannel } from './src/channels/twilio.js';
+import { twilioVoice } from './src/channels/voice.js';
 import { imessageChannel } from './src/channels/imessage.js';
 import { emailChannel } from './src/channels/email.js';
 
@@ -58,6 +59,15 @@ if (env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.PUBLIC_URL) {
     whatsappFrom: env.TWILIO_WHATSAPP_FROM,
     publicUrl: env.PUBLIC_URL,
   });
+  // Phone calls on the same Twilio account: point a number's "A call comes in" webhook at {PUBLIC_URL}/webhooks/voice.
+  if (env.VOICE_CALLS !== '0') {
+    channels.voice = twilioVoice({
+      authToken: env.TWILIO_AUTH_TOKEN,
+      publicUrl: env.PUBLIC_URL,
+      voice: env.TWILIO_VOICE_NAME || undefined,
+      language: env.TWILIO_VOICE_LANGUAGE || undefined,
+    });
+  }
 }
 if (env.BLUEBUBBLES_URL && env.BLUEBUBBLES_PASSWORD) {
   channels.imessage = imessageChannel({
