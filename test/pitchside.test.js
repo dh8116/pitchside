@@ -11,6 +11,7 @@ import { createUserStore, newUser } from '../src/users.js';
 import { createApp } from '../src/app.js';
 import { anthropicLLM, openaiCompatibleLLM, metaLLM, chainLLM, llmFromEnv, pickLocalModel } from '../src/llm.js';
 import { createConnectivity, isNetworkError } from '../src/connectivity.js';
+import { COACH_PROMPT, COACH_PROMPT_LITE } from '../src/prompts.js';
 import { createSearch, parseDuckDuckGo } from '../src/search.js';
 import { whatsappChannel } from '../src/channels/whatsapp.js';
 import { twilioChannel, twilioSignature } from '../src/channels/twilio.js';
@@ -706,4 +707,11 @@ test('web status endpoint reports online or offline for the Post buttons', async
   const plain = createApp({ coach: {}, users: await tmpStore(), channels: {}, publicDir: path.resolve('public'), log: { error() {} } });
   const s2 = http.createServer(plain).listen(0);
   try { assert.deepEqual(await (await fetch(`http://127.0.0.1:${s2.address().port}/api/web/status`)).json(), { online: true }); } finally { s2.close(); }
+});
+
+test('the short prompt for local models keeps the reply-style rules and special formats of the full one', () => {
+  for (const rule of [/texting/, /blank line/, /<post platform=/, /<remember>/, /\[Pitchside context/, /Day N of 30 with Pitchside/, /under 280/, /under 300/, /offline/, /never invent/i, /no headers, no bold, no emoji/i]) {
+    assert.match(COACH_PROMPT_LITE, rule);
+  }
+  assert.ok(COACH_PROMPT_LITE.length < COACH_PROMPT.length, 'still lighter than the full prompt');
 });
