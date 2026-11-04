@@ -9,6 +9,7 @@ import { llmFromEnv, listOllamaModels, pickLocalModel, FREE_PROVIDERS, META_PROV
 import { cleanKey, keyProblem, keySources, envFileConflicts, probeKey, keyLine } from './src/keys.js';
 import { createConnectivity } from './src/connectivity.js';
 import { createSearch } from './src/search.js';
+import { metaTranscriber, VOICE_MODEL } from './src/meta/voice.js';
 import { COACH_PROMPT_LITE } from './src/prompts.js';
 import { createPublisher, postersFromEnv, parseOwners, isOwner } from './src/posting/index.js';
 import { createUserStore } from './src/users.js';
@@ -112,6 +113,13 @@ function envConflicts() {
 }
 const admins = parseOwners(env.ADMINS || env.POST_OWNERS);
 
+// Meta Voice Transcribe turns a recorded voice message into text, so Talk and Call work in any browser with a
+// microphone. It is on whenever a Meta key is set (META_VOICE=0 turns it off).
+const metaKey = cleanKey(env.MODEL_API_KEY).key || cleanKey(env.META_API_KEY).key;
+const transcribe = metaKey && env.META_VOICE !== '0'
+  ? metaTranscriber({ apiKey: metaKey, baseUrl: env.META_API_BASE || META_PROVIDER.baseUrl, model: env.META_VOICE_MODEL || VOICE_MODEL })
+  : null;
+
 const users = createUserStore(path.resolve(env.DATA_DIR ?? path.join(here, 'data')));
 const coach = createCoach({
   llm,
@@ -133,6 +141,7 @@ const handler = createApp({
   webChat: env.WEB_CHAT !== '0',
   webChatPassword: env.WEB_CHAT_PASSWORD ?? '',
   connectivity,
+  transcribe,
   setupUrl: env.SETUP_URL || undefined,
 });
 
@@ -140,6 +149,7 @@ http.createServer(handler).listen(port, () => {
   const on = Object.keys(channels);
   console.log(`Pitchside is running at http://localhost:${port}`);
   console.log(`Model: ${llm.name}`);
+  if (transcribe) console.log(`Voice: Meta Voice Transcribe on (${env.META_VOICE_MODEL || VOICE_MODEL})`);
   // Load a local model into memory now, so the first message after the internet drops isn't a cold start.
   for (const c of envConflicts()) {
     console.warn(`WARNING: ${c.name} is set in your shell or environment${c.envHint ? ` (${c.envHint})` : ''} and differs from .env${c.fileHint ? ` (${c.fileHint})` : ''}. The app uses the shell's value, so the change in .env is ignored. Unset it (e.g. unset ${c.name}) and restart.`);

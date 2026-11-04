@@ -6,6 +6,7 @@ import { CHECKIN_REQUEST, NUDGE_REQUEST } from './prompts.js';
 import { safeEqual } from './channels/util.js';
 import { isNetworkError } from './connectivity.js';
 import { INTRO_PROMPT } from './import.js';
+import { MAX_WAV_BYTES } from './meta/voice.js';
 import { DEFAULT_SETUP_URL, PROVIDERS, billingInfo, rateLimitInfo, rateLimitText } from './limits.js';
 
 const IMPORT_SOURCES = new Set(['paste', 'file', 'url']);
@@ -17,12 +18,12 @@ const MAX_FAILED_PASSCODES = 10;
 const LOCKOUT_MS = 15 * 60_000;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
-async function readBody(req) {
+async function readBody(req, max = MAX_BODY) {
   const chunks = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > MAX_BODY) throw Object.assign(new Error('body too large'), { status: 413 });
+    if (size > max) throw Object.assign(new Error('body too large'), { status: 413 });
     chunks.push(c);
   }
   return Buffer.concat(chunks);
@@ -49,7 +50,7 @@ function friendlyError(err, setupUrl = DEFAULT_SETUP_URL) {
   return 'Something went wrong on my side. Try again in a moment.';
 }
 
-export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', connectivity = null, setupUrl = DEFAULT_SETUP_URL, log = console, now = () => Date.now() }) {
+export function createApp({ coach, users, channels, publicDir, webChat = true, webChatPassword = '', connectivity = null, transcribe = null, setupUrl = DEFAULT_SETUP_URL, log = console, now = () => Date.now() }) {
   // Wrong-passcode attempts per client address, so the passcode can't be guessed by brute force.
   const failures = new Map();
 
@@ -157,6 +158,21 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
           try {
             return send(res, 200, { bubbles: await coach.publishDraft({ key: `web:${id}`, postId }) });
           } catch (err) {
+            log.error(err);
+            return fail(res, err);
+          }
+        }
+        // Meta Voice Transcribe: the chat asks whether it is on, and sends a recorded WAV to be turned into text.
+        if (req.method === 'GET' && pathname === '/api/web/voice-config') return send(res, 200, { meta: Boolean(transcribe) });
+        if (req.method === 'POST' && pathname === '/api/web/transcribe') {
+          if (!transcribe) return send(res, 404, { error: 'Meta voice is not set up on this server.' });
+          const wav = await readBody(req, MAX_WAV_BYTES).catch((err) => (err.status === 413 ? null : Promise.reject(err)));
+          if (!wav) return send(res, 413, { error: 'That recording is too long. Keep it under about four minutes.' });
+          try {
+            return send(res, 200, { text: (await transcribe(wav)).text });
+          } catch (err) {
+            if (err.code === 'BAD_AUDIO') return send(res, 400, { error: err.message });
+            err.provider ??= 'meta';
             log.error(err);
             return fail(res, err);
           }

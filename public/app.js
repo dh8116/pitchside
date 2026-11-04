@@ -368,16 +368,24 @@ function renderVoice(s) {
   const talking = s.listening && !s.calling;
   $('v-talk').textContent = talking ? 'Stop' : 'Talk';
   $('v-talk').setAttribute('aria-pressed', String(talking));
-  $('v-talk').disabled = s.calling || !voiceSupport.listen;
+  $('v-talk').disabled = s.calling || !voice?.canListen();
   $('v-read').setAttribute('aria-pressed', String(s.readAloud));
   $('v-read').disabled = !voiceSupport.speak;
   $('v-call').textContent = s.calling ? 'End call' : 'Call';
   $('v-call').classList.toggle('live', s.calling);
-  $('v-call').disabled = !voiceSupport.listen;
+  $('v-call').disabled = !voice?.canListen();
   $('v-status').textContent = s.error || s.status;
   $('v-status').classList.toggle('error', Boolean(s.error));
 }
 
+async function transcribeWithMeta(blob) {
+  const res = await fetch('/api/web/transcribe', { method: 'POST', headers: { 'content-type': 'audio/wav', ...authHeaders() }, body: blob });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `error ${res.status}`);
+  return data.text ?? '';
+}
+
+// Meta Voice Transcribe lets any browser talk to Pitchside, so the bar also shows when only the server can listen.
 if (voiceSupport.listen || voiceSupport.speak) {
   $('voicebar').hidden = false;
   voice = createVoice({
@@ -391,6 +399,11 @@ if (voiceSupport.listen || voiceSupport.speak) {
   $('v-call').onclick = () => voice.toggleCall();
   renderVoice(voice.state);
 }
+fetch('/api/web/voice-config', { headers: authHeaders() }).then((r) => (r.ok ? r.json() : {})).then((c) => {
+  if (!c.meta) return;
+  if (!voice) { $('voicebar').hidden = false; voice = createVoice({ send: (t) => send(t), fill: (t) => { $('input').value = t; }, isBusy: () => busy, onState: renderVoice }); $('v-talk').onclick = () => voice.toggleDictation(); $('v-read').onclick = () => voice.toggleReadAloud(); $('v-call').onclick = () => voice.toggleCall(); }
+  voice.useMeta(transcribeWithMeta);
+}).catch(() => {});
 
 // ---- A rate limit: exactly how long to wait (counting down), and where to go next ----
 function addLimitCard(limit) {

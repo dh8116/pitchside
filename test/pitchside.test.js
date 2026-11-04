@@ -1563,3 +1563,95 @@ test('key check: Meta is first and is probed at its own base URL; a valid key wi
   assert.match(keyLine({ label: 'Meta', envName: 'MODEL_API_KEY', apiKey: 'abcd1234', probe: { status: 'billing' } }), /Meta: MODEL_API_KEY …1234 · accepted, but billing is not set up yet/);
   assert.match(keyLine({ label: 'Meta', envName: 'MODEL_API_KEY', apiKey: 'abcd1234', probe: await probe(401) }), /REJECTED by the provider/);
 });
+
+
+import { wavInfo, metaTranscriber, VOICE_MODEL } from '../src/meta/voice.js';
+import { encodeWav, rms, createEndpointer, WAV_RATE } from '../public/wav.js';
+
+const sine = (seconds, rate, amp = 0.5, hz = 220) => Float32Array.from({ length: Math.round(seconds * rate) }, (_, i) => amp * Math.sin((2 * Math.PI * hz * i) / rate));
+const wavOf = (seconds = 1, rate = 48000) => Buffer.from(encodeWav([sine(seconds, rate)], rate));
+
+test('Meta voice: the browser WAV is what Meta accepts (mono, 16-bit, 16 kHz), resampled from the microphone rate', () => {
+  const wav = wavOf(1, 48000);
+  assert.deepEqual(wavInfo(wav), { sampleRate: 16000, ms: 1000 });
+  assert.equal(wav.length, 44 + 16000 * 2);
+  assert.equal(wav.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(wav.readUInt16LE(22), 1, 'mono');
+  assert.equal(wav.readUInt16LE(34), 16, '16-bit');
+  assert.ok(Math.abs(wav.readInt16LE(44 + 2 * 100)) > 1000, 'the samples are the tone, not silence');
+  assert.equal(Buffer.from(encodeWav([sine(1, 16000)], 16000)).length, 44 + 32000, 'no resampling when the rate already matches');
+  assert.equal(wavInfo(Buffer.from(encodeWav([sine(0.5, 44100)], 44100))).ms, 500);
+
+  const bad = (buf, re) => assert.throws(() => wavInfo(buf), (e) => e.code === 'BAD_AUDIO' && re.test(e.message));
+  bad(Buffer.from('not audio at all, just some text bytes that are long enough to look like a header....'), /not a WAV/);
+  const stereo = Buffer.from(wav); stereo.writeUInt16LE(2, 22); bad(stereo, /mono 16-bit/);
+  const odd = Buffer.from(wav); odd.writeUInt32LE(44100, 24); bad(odd, /16 kHz or 24 kHz/);
+  const huge = Buffer.from(wav); huge.writeUInt32LE(16000 * 2 * 601, 40); bad(Buffer.concat([huge, Buffer.alloc(16000 * 2 * 601)]), /longer than 10 minutes/);
+});
+
+test('Meta voice: the transcribe request has the documented shape and its answer comes back as text', async () => {
+  let seen;
+  const transcribe = metaTranscriber({ apiKey: 'k', baseUrl: 'https://api.meta.ai/v1/', fetchImpl: async (url, init) => { seen = { url, init }; return Response.json({ sessionId: 's', transcript: '  who should I call at the clinic  ', audioDurationMs: 1000, turns: [] }); } });
+  const out = await transcribe(wavOf(1), { languageBias: ['English'] });
+  assert.deepEqual(out, { text: 'who should I call at the clinic', ms: 1000 });
+  assert.equal(seen.url, 'https://api.meta.ai/v1/asr/transcribe');
+  assert.equal(seen.init.headers.authorization, 'Bearer k');
+  assert.equal(seen.init.headers.accept, 'application/json');
+  assert.ok(seen.init.body instanceof FormData);
+  assert.deepEqual(JSON.parse(await seen.init.body.get('request').text()), { model: VOICE_MODEL, audioEncoding: 'WAV', mode: 'PUSH_TO_TALK', languageBias: ['English'] });
+  assert.equal(seen.init.body.get('request').type, 'application/json');
+  assert.equal(seen.init.body.get('audio').type, 'audio/wav');
+  assert.equal(seen.init.body.get('audio').size, 44 + 32000);
+
+  await assert.rejects(transcribe(Buffer.from('junk'.repeat(30))), { code: 'BAD_AUDIO' });
+  const limited = metaTranscriber({ apiKey: 'k', baseUrl: 'x', fetchImpl: async () => new Response('{"error":{"message":"Rate limit exceeded. Please retry after 3 seconds.","type":"rate_limit_error","code":"rate_limit_exceeded"}}', { status: 429, headers: { 'retry-after': '3' } }) });
+  await assert.rejects(limited(wavOf(1)), { status: 429, code: 'rate_limit_exceeded' });
+});
+
+test('Meta voice: the chat endpoint reports whether Meta voice is on, transcribes a WAV, and refuses bad or oversized audio', async () => {
+  const calls = [];
+  const transcribe = async (wav) => { calls.push(wav.length); wavInfo(wav); return { text: 'hello from meta' }; };
+  const users = await tmpStore();
+  const mk = (t) => createApp({ coach: {}, users, channels: {}, publicDir: path.resolve('public'), transcribe: t, log: { error() {} } });
+  const server = http.createServer(mk(transcribe)).listen(0);
+  const off = http.createServer(mk(null)).listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.deepEqual(await (await fetch(`${base}/api/web/voice-config`)).json(), { meta: true });
+    assert.deepEqual(await (await fetch(`http://127.0.0.1:${off.address().port}/api/web/voice-config`)).json(), { meta: false });
+    assert.equal((await fetch(`http://127.0.0.1:${off.address().port}/api/web/transcribe`, { method: 'POST', body: wavOf(1) })).status, 404);
+
+    const ok = await fetch(`${base}/api/web/transcribe`, { method: 'POST', headers: { 'content-type': 'audio/wav' }, body: wavOf(2) });
+    assert.deepEqual([ok.status, await ok.json()], [200, { text: 'hello from meta' }]);
+    assert.deepEqual(calls, [44 + 64000]);
+    const bad = await fetch(`${base}/api/web/transcribe`, { method: 'POST', body: Buffer.from('x'.repeat(100)) });
+    assert.deepEqual([bad.status, (await bad.json()).error], [400, 'That is not a WAV file.']);
+    const big = await fetch(`${base}/api/web/transcribe`, { method: 'POST', body: Buffer.alloc(8_100_000) });
+    assert.equal(big.status, 413);
+  } finally {
+    server.close(); off.close();
+  }
+});
+
+test('Meta voice: the endpointer ends a recording after speech and a pause, ignores room noise, and stops at the time limit', () => {
+  const rate = 16000;
+  const feed = (ep, frames) => frames.map((f) => ep.push(f));
+  const frame = (amp) => sine(0.1, rate, amp);                  // 100 ms
+  const quiet = () => Float32Array.from({ length: 1600 }, (_, i) => 0.002 * Math.sin(i));
+  const ep = createEndpointer({ rate });
+  const states = feed(ep, [...Array(4).fill(0).map(quiet), ...Array(6).fill(0).map(() => frame(0.3)), ...Array(14).fill(0).map(quiet)]);
+  assert.equal(states[0], 'waiting');
+  assert.equal(states[5], 'waiting', 'a click or a cough is not speech: it takes 250 ms of sound');
+  assert.equal(states[6], 'speaking');
+  assert.equal(states.at(-1), 'done');
+  assert.equal(states.indexOf('done') > 9 + 10, true, 'it waits out the 1.1 s of silence before finishing');
+
+  const noisy = createEndpointer({ rate });
+  const hum = () => Float32Array.from({ length: 1600 }, (_, i) => 0.03 * Math.sin(i * 0.7));
+  assert.ok(feed(noisy, Array(60).fill(0).map(hum)).every((s) => s === 'waiting'), 'steady room noise is learned as the floor, not speech');
+  assert.equal(noisy.heardSpeech, false);
+
+  const never = createEndpointer({ rate, maxMs: 2000 });
+  assert.equal(feed(never, Array(25).fill(0).map(quiet)).at(-1), 'done', 'the time limit ends a recording nobody spoke into');
+  assert.ok(rms(frame(0.5)) > 0.3 && rms(new Float32Array(0)) === 0);
+});
