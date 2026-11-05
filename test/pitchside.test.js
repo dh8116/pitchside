@@ -537,10 +537,21 @@ test('browser chat passcode: required when set, locks out after repeated wrong g
     assert.equal(chat.status, 200);
     assert.equal((await fetch(`${base}/`)).status, 200); // the page itself loads; only the API is gated
 
+    // A right passcode signs the browser in with an HttpOnly cookie; the cookie alone is then enough.
+    const signedIn = await hist('s3cret');
+    const cookie = signedIn.headers.get('set-cookie');
+    assert.match(cookie, /^pitchside_session=\d+\.[\w-]+; Path=\/api\/web; Max-Age=2592000; HttpOnly; SameSite=Strict$/);
+    const withCookie = (c) => fetch(`${base}/api/web/history?id=${id}`, { headers: { cookie: c } });
+    assert.equal((await withCookie(cookie.split(';')[0])).status, 200);
+    assert.equal((await withCookie(cookie.split(';')[0].replace(/.$/, (ch) => (ch === 'A' ? 'B' : 'A')))).status, 401); // tampered
+    assert.equal((await withCookie(cookie.split(';')[0].replace(/=\d+/, '=99999999999999'))).status, 401); // expiry changed
+
     for (let i = 0; i < 10; i++) assert.equal((await hist('wrong')).status, 401);
     assert.equal((await hist('s3cret')).status, 429); // locked out, even with the right code
     clock += 15 * 60_000;
     assert.equal((await hist('s3cret')).status, 200);
+    clock += 30 * 24 * 60 * 60_000;
+    assert.equal((await withCookie(cookie.split(';')[0])).status, 401); // expired after 30 days
   } finally {
     server.close();
   }

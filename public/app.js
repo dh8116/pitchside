@@ -42,7 +42,8 @@ function touchSession(id, title) {
 }
 
 // Only needed when the server sets WEB_CHAT_PASSWORD. Remembered on this device.
-// The passcode lives in memory only, never in browser storage: a reload asks for it again.
+// The passcode lives in memory only, never in browser storage. Once it's accepted, the server
+// keeps this browser signed in with an HttpOnly cookie for 30 days, so a reload doesn't ask again.
 let passcode = '';
 try { localStorage.removeItem(PASSCODE_KEY); } catch {} // clear copies saved by older versions
 const authHeaders = () => (passcode ? { 'x-pitchside-passcode': passcode } : {});
