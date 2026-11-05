@@ -229,7 +229,7 @@ WhatsApp / Twilio / BlueBubbles / Postmark ──webhook──▶ src/channels/*
 
 ## Deploying
 
-Any host that runs Node and keeps a disk works (Railway, Fly.io, Render, a VPS). A `Dockerfile` is included and stores data in `/data`, so mount a volume there. On a public server, set `WEB_CHAT_PASSWORD` so only people with the passcode can use the browser chat (and your API key). After 10 wrong guesses from one address, the chat locks for 15 minutes. Set `WEB_CHAT=0` to turn the browser chat off entirely.
+Any host that runs Node and keeps a disk works (Railway, Fly.io, Render, a VPS). A `Dockerfile` is included and stores data in `/data`, so mount a volume there. On a public server, set `WEB_CHAT_PASSWORD` so only people with the passcode can use the browser chat (and your API key). After 10 wrong guesses from one address, the chat locks for 15 minutes. A right passcode keeps that browser signed in for 30 days with an HttpOnly cookie (the passcode itself is never stored in the browser); changing `WEB_CHAT_PASSWORD` signs everyone out. Set `WEB_CHAT=0` to turn the browser chat off entirely.
 
 ## Development
 

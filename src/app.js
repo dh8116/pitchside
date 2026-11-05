@@ -1,4 +1,5 @@
 // HTTP routes: channel webhooks, the try-it-in-the-browser chat, static files.
+import { createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseReply } from './format.js';
@@ -16,6 +17,11 @@ const MAX_BODY = 1_000_000;
 const UUID_RE = /^[0-9a-f-]{36}$/;
 const MAX_FAILED_PASSCODES = 10;
 const LOCKOUT_MS = 15 * 60_000;
+// After a right passcode the browser gets an HttpOnly session cookie, so the passcode itself is never
+// stored client-side and page scripts can't read the session. Signed with the passcode: changing
+// WEB_CHAT_PASSWORD signs everyone out.
+const SESSION_COOKIE = 'pitchside_session';
+const SESSION_MS = 30 * 24 * 60 * 60_000;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
 
 async function readBody(req, max = MAX_BODY) {
@@ -67,12 +73,27 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
     return limit ? rateLimitText(limit) : friendlyError(err, setupUrl);
   };
 
-  function checkPasscode(req) {
+  const sign = (expires) => createHmac('sha256', webChatPassword).update(`pitchside-session:${expires}`).digest('base64url');
+
+  function validSession(req) {
+    const value = String(req.headers.cookie ?? '').split(/;\s*/).find((c) => c.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);
+    const [expires, mac] = (value ?? '').split('.');
+    return /^\d+$/.test(expires ?? '') && Number(expires) > now() && safeEqual(mac, sign(expires));
+  }
+
+  function startSession(req, res) {
+    const expires = now() + SESSION_MS;
+    const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+    res.setHeader('set-cookie', `${SESSION_COOKIE}=${expires}.${sign(expires)}; Path=/api/web; Max-Age=${SESSION_MS / 1000}; HttpOnly; SameSite=Strict${secure}`);
+  }
+
+  function checkPasscode(req, res) {
     if (!webChatPassword) return null;
+    if (req.headers['x-pitchside-passcode'] === undefined && validSession(req)) return null;
     const ip = req.socket.remoteAddress ?? 'unknown';
     const f = failures.get(ip);
     if (f && f.count >= MAX_FAILED_PASSCODES && now() - f.first < LOCKOUT_MS) return { status: 429, error: 'Too many wrong passcodes. Try again in 15 minutes.' };
-    if (safeEqual(req.headers['x-pitchside-passcode'], webChatPassword)) { failures.delete(ip); return null; }
+    if (safeEqual(req.headers['x-pitchside-passcode'], webChatPassword)) { failures.delete(ip); startSession(req, res); return null; }
     if (req.headers['x-pitchside-passcode'] !== undefined) {
       const fresh = !f || now() - f.first >= LOCKOUT_MS;
       failures.set(ip, fresh ? { count: 1, first: now() } : { ...f, count: f.count + 1 });
@@ -133,7 +154,7 @@ export function createApp({ coach, users, channels, publicDir, webChat = true, w
 
       if (pathname.startsWith('/api/web/')) {
         if (!webChat) return send(res, 404, { error: 'web chat is disabled' });
-        const denied = checkPasscode(req);
+        const denied = checkPasscode(req, res);
         if (denied) return send(res, denied.status, { error: denied.error, passcode: denied.status === 401 });
         if (req.method === 'POST' && pathname === '/api/web/chat') {
           let body;
