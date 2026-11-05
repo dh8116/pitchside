@@ -65,13 +65,17 @@ export function htmlToText(html) {
     return tag?.match(/content=["']([^"']*)["']/i)?.[1] ?? '';
   };
   const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? '';
-  const body = html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<head\b[\s\S]*?<\/head>/gi, ' ')
-    .replace(/<(title|script|style|noscript|svg|template|iframe)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|footer|ul|ol|table|blockquote)>|<br\s*\/?>/gi, '\n')
-    .replace(/<\/(a|td|th|button|option)>/gi, ' ') // neighbours stay apart ("Pricing" "About"), other inline tags just vanish
-    .replace(/<[^>]+>/g, '');
+  // Each removal repeats until nothing changes: one pass can leave a new comment, script or tag
+  // behind ("<scr<script></script>ipt>").
+  const untilStable = (s, step) => { let prev; do { prev = s; s = step(s); } while (s !== prev); return s; };
+  const body = untilStable(
+    untilStable(html, (s) => s
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<head\b[\s\S]*?<\/head>/gi, ' ')
+      .replace(/<(title|script|style|noscript|svg|template|iframe)\b[\s\S]*?<\/\1>/gi, ' '))
+      .replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|footer|ul|ol|table|blockquote)>|<br\s*\/?>/gi, '\n')
+      .replace(/<\/(a|td|th|button|option)>/gi, ' '), // neighbours stay apart ("Pricing" "About"), other inline tags just vanish
+    (s) => s.replace(/<[^>]+>/g, ''));
   const lines = decode(body).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const text = lines.filter((l, i) => l !== lines[i - 1]).join('\n');
   const head = [title && `Title: ${decode(title).replace(/\s+/g, ' ').trim()}`, meta('description') || meta('og:description')].filter(Boolean);

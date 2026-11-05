@@ -42,8 +42,9 @@ function touchSession(id, title) {
 }
 
 // Only needed when the server sets WEB_CHAT_PASSWORD. Remembered on this device.
+// The passcode lives in memory only, never in browser storage: a reload asks for it again.
 let passcode = '';
-try { passcode = localStorage.getItem(PASSCODE_KEY) ?? ''; } catch {}
+try { localStorage.removeItem(PASSCODE_KEY); } catch {} // clear copies saved by older versions
 const authHeaders = () => (passcode ? { 'x-pitchside-passcode': passcode } : {});
 
 function lock(message = '') {
@@ -280,7 +281,6 @@ $('new').onclick = () => {
 $('gate').onsubmit = (e) => {
   e.preventDefault();
   passcode = $('passcode').value.trim();
-  try { localStorage.setItem(PASSCODE_KEY, passcode); } catch {}
   $('passcode').value = '';
   restore().catch(() => {});
 };

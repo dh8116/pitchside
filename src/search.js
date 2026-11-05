@@ -10,7 +10,11 @@
 const UA = 'Mozilla/5.0 (compatible; Pitchside)';
 export const SEARCH_UNAVAILABLE = 'Search is unavailable right now (offline or blocked). Say you could not check, and answer from what you already know.';
 
-const clean = (s = '') => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
+// Tags are stripped until none are left (one pass can leave "<scr<b>ipt>" behind), then entities are
+// decoded in a single pass so "&amp;lt;" becomes "&lt;", not "<".
+const ENTITIES = { amp: '&', quot: '"', '#x27': "'", '#39': "'", lt: '<', gt: '>' };
+const stripTags = (s) => { let prev; do { prev = s; s = s.replace(/<[^>]+>/g, ''); } while (s !== prev); return s; };
+const clean = (s = '') => stripTags(s).replace(/&(amp|quot|#x27|#39|lt|gt);/g, (_, e) => ENTITIES[e]).replace(/\s+/g, ' ').trim();
 
 export function parseDuckDuckGo(html, limit = 5) {
   const out = [];
