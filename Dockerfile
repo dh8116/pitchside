@@ -1,4 +1,4 @@
-FROM node:24-slim
+FROM node:25-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
